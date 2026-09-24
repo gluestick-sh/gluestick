@@ -1,6 +1,6 @@
 # cli
 
-> The official `glue` command line — Scoop-compatible, powered by the [core](https://github.com/gluestick-sh/core) engine.
+> The official `glue` command line — Scoop-compatible, powered by the [core](../core) engine.
 
 ## Platform
 
@@ -19,30 +19,18 @@ irm https://gluestick.sh/install.ps1 | iex
 Requires **Go 1.26+**.
 
 ```powershell
-git clone https://github.com/gluestick-sh/cli.git
-cd cli
-go build -o glue.exe ./glue
+git clone https://github.com/gluestick-sh/gluestick.git
+cd gluestick
+go build -o glue.exe ./cli/glue
 .\glue.exe path setup
 ```
 
-`cli` depends on a published **core** module version (see `go.mod`); a plain `go build` fetches it automatically. For local sibling-repo development, use a `go.work` file placed **next to** the repos (not committed to any repo) so local changes to `core`/`shim` are picked up:
+This module lives in the [gluestick](https://github.com/gluestick-sh/gluestick) monorepo; the root `go.work` workspace resolves `core` and `shim` locally:
 
-```go
-// ../go.work  (e.g. github.com/go.work covering all three repos)
-go 1.26.3
-
-use (
-	./cli
-	./core
-	./shim
-)
-```
-
-Build the shim runner (used by core when creating PATH shims):
+Build the shim runner (used by core when creating PATH shims) from the monorepo root:
 
 ```powershell
-cd ../shim
-go build -o shim.exe .
+go build -o shim.exe ./shim
 ```
 
 ## Quick start
@@ -131,13 +119,13 @@ glue install git --no-parallel --force
 ## Architecture
 
 ```
-glue CLI (this repo)
+glue CLI (cli module)
        │
        ├── github.com/gluestick-sh/core/engine   ← install/search/cache logic
-       └── github.com/gluestick-sh/shim           ← shim.exe runner (sibling repo)
+       └── github.com/gluestick-sh/shim           ← shim.exe runner (shim module)
 ```
 
-The CLI is a thin [Cobra](https://github.com/spf13/cobra) layer: parse flags, call `engine.*`, format output. No business logic should live in `cli/glue` beyond terminal UX. Shim management APIs live in `core/shim`; the standalone [shim](https://github.com/gluestick-sh/shim) repo builds the tiny `shim.exe` stub copied onto PATH.
+The CLI is a thin [Cobra](https://github.com/spf13/cobra) layer: parse flags, call `engine.*`, format output. No business logic should live in `cli/glue` beyond terminal UX. Shim management APIs live in `core/shim`; the [shim](../shim) module builds the tiny `shim.exe` stub copied onto PATH.
 
 ## Build release binary
 
@@ -151,9 +139,9 @@ Use your project's `build.ps1` or CI release workflow for commit hash and date i
 ## Development
 
 ```powershell
-# With core as a sibling directory covered by ../go.work
-go test ./glue/...
-go build -o glue.exe ./glue
+# From the monorepo root (go.work resolves core/shim locally)
+go test ./cli/...
+go build -o glue-alpha.exe ./cli/glue
 ```
 
 ## Testing
@@ -161,10 +149,10 @@ go build -o glue.exe ./glue
 - Unit tests: `go test ./glue/...`
 - Manual smoke: `glue doctor`, `glue search git`, install in a temp `--root` (hidden flag for dev/benchmark)
 
-## Related projects
+## Related modules
 
-- [core](https://github.com/gluestick-sh/core) — embeddable engine library
-- [shim](https://github.com/gluestick-sh/shim) — dependency-free `shim.exe` runner
+- [core](../core) — embeddable engine library
+- [shim](../shim) — dependency-free `shim.exe` runner
 - [Scoop](https://github.com/ScoopInstaller/Scoop) — compatible bucket ecosystem
 
 ## License

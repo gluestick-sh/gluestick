@@ -2,7 +2,7 @@
 
 > **Glue** — the agent-ready package manager for Windows. Scoop-compatible manifests, CAS zero-copy installs, parallel downloads, and first-class AI-agent interfaces (`--json`, stable exit codes, and an MCP server).
 
-This is the **monorepo** for the Glue project, created during the *"Agent-Ready on Windows"* pivot. Full strategy and phase plan: [`docs/agent-ready-roadmap.md`](docs/agent-ready-roadmap.md).
+This is the **monorepo** for the Glue project.
 
 ## Layout
 
@@ -11,9 +11,6 @@ This is the **monorepo** for the Glue project, created during the *"Agent-Ready 
 | `cli/` | `github.com/gluestick-sh/cli` | The `glue` command (all Scoop-style verbs, `--json` output, future `glue mcp`) |
 | `core/` | `github.com/gluestick-sh/core` | Embeddable engine: manifest parsing, CAS store, parallel downloads, SQLite index, shims |
 | `shim/` | `github.com/gluestick-sh/shim` | PATH shim runner used by core when installing executables |
-| `docs/` | — | Roadmap, JSON schemas, MCP docs |
-
-**Not in this repo (frozen, non-goals of the pivot):** `web` (marketing site), `desktop` / `desktop-pro`, `gateway` / `api`. They remain in their original repositories, online and untouched.
 
 ## Platform
 
@@ -26,13 +23,18 @@ Requires **Go 1.26+**. The repo uses a Go workspace (`go.work`) so the three mod
 ```powershell
 go work sync
 go test ./cli/... ./core/... ./shim/...   # all modules via the workspace
-go build -o glue.exe ./cli/glue
+go build -o glue-alpha.exe ./cli/glue     # dev build (see note below)
 go build -o shim.exe ./shim
 ```
 
 > Note: in Go workspace mode, `./...` is **not** a valid pattern from the `go.work`
 > root (the root itself is not a module). Enumerate the module directories instead,
 > or run the commands from inside a module.
+
+> **Dev isolation**: the data root is derived from the executable name — `glue.exe`
+> uses `%USERPROFILE%\.glue`, while a dev build named `glue-alpha.exe` automatically
+> uses `%USERPROFILE%\.glue-alpha`, keeping development builds fully isolated from
+> a real installation.
 
 ## Quick start
 

@@ -2,7 +2,7 @@
 
 > Gluestick embeddable engine — the Windows package management core library, compatible with [Scoop](https://github.com/ScoopInstaller/Scoop) buckets and manifests.
 
-**core** is the shared library for the official [cli](https://github.com/gluestick-sh/cli) (the `glue` command) and third-party integrations. It handles manifest parsing, CAS downloads, install/uninstall, shims, the bucket registry, and the SQLite cache index.
+**core** is the shared library for the official [cli](../cli) (the `glue` command) and third-party integrations. It handles manifest parsing, CAS downloads, install/uninstall, shims, the bucket registry, and the SQLite cache index.
 
 ## Platform
 
@@ -20,7 +20,7 @@
 ## Install
 
 ```bash
-go get gluestick.sh/core@v0.1.0
+go get github.com/gluestick-sh/core
 ```
 
 Requires **Go 1.26+**.
@@ -37,7 +37,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gluestick.sh/core/engine"
+	"github.com/gluestick-sh/core/engine"
 )
 
 func main() {
@@ -84,7 +84,7 @@ stored under the data root by default.
 
 ## Public API
 
-Import **`gluestick.sh/core/engine`** for install, uninstall, search, catalog, cache,
+Import **`github.com/gluestick-sh/core/engine`** for install, uninstall, search, catalog, cache,
 doctor, and progress reporting. Advanced use cases may import `manifest`, `bucket`,
 `config`, `downloader`, `store`, `cache`, or `shim` directly.
 
@@ -100,9 +100,9 @@ Do not import `engine/internal/*` or `apps` — use `engine` helpers instead
 ## Development
 
 ```powershell
-git clone https://github.com/gluestick-sh/core.git
-cd core
-go test ./... -count=1
+git clone https://github.com/gluestick-sh/gluestick.git
+cd gluestick
+go test ./core/... -count=1
 ```
 
 ## Documentation

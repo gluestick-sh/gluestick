@@ -6,8 +6,8 @@ Thank you for contributing to **core**.
 
 **core** holds the business logic of the Gluestick package manager: the install
 pipeline, manifest parsing, downloader, cache, bucket registry, shim management,
-and the embeddable `engine` API. Terminal UX belongs in the separate
-[cli](https://github.com/gluestick-sh/cli) project.
+and the embeddable `engine` API. Terminal UX belongs in the [cli](../../cli)
+module of this monorepo.
 
 **Rule of thumb:** business logic belongs in **core**; terminal UX belongs in
 **cli**.
@@ -15,17 +15,13 @@ and the embeddable `engine` API. Terminal UX belongs in the separate
 ## Development setup
 
 ```powershell
-git clone https://github.com/gluestick-sh/core.git
-cd core
-go test ./... -count=1
+git clone https://github.com/gluestick-sh/gluestick.git
+cd gluestick
+go test ./core/... -count=1
 ```
 
-To develop `cli` against a local core checkout, add a replace directive to the
-cli module's `go.mod`:
-
-```go
-replace gluestick.sh/core => ../core
-```
+Inside the monorepo, the root `go.work` workspace resolves `core` for the `cli`
+module automatically — no `replace` directives are needed.
 
 ## Platform
 
@@ -68,12 +64,12 @@ add engine test for PlanInstall with missing bucket
 Include as much of the following as applies:
 
 - **core version**
-  - If you report from a project that **imports** core (e.g. [cli](https://github.com/gluestick-sh/cli)), run in that project's directory:
+  - If you report from a project that **imports** core (e.g. [cli](../../cli)), run in that project's directory:
     ```powershell
-    go list -m gluestick.sh/core
+    go list -m github.com/gluestick-sh/core
     ```
-    Paste the output (e.g. `gluestick.sh/core v0.1.0`, or `v0.1.0 => ../core` when using a local `replace`).
-  - If you report **directly against this repository**, say whether you are on a release tag (e.g. `v0.1.0`) or a commit hash (`git rev-parse HEAD`).
+    Paste the output.
+  - If you report **directly against this repository**, say whether you are on a release tag or a commit hash (`git rev-parse HEAD`).
 - **Windows version** (e.g. Windows 11 24H2)
 - **Steps to reproduce**
 - **Verbose log** where relevant (e.g. `glue install <pkg> --verbose` when the bug is seen through cli)

@@ -11,9 +11,6 @@ The Glue monorepo: a **Windows-only**, Scoop-compatible package manager being pi
 - `core/` — embeddable engine (module `github.com/gluestick-sh/core`)
 - `shim/` — PATH shim runner (module `github.com/gluestick-sh/shim`)
 
-Read `docs/agent-ready-roadmap.md` before making product-level decisions. It is the
-approved strategy document (decision record in its §8).
-
 ## Environment & commands
 
 ```powershell
@@ -21,13 +18,30 @@ go work sync                 # after adding modules or editing go.mod files
 go build ./cli/... ./core/... ./shim/...   # compile everything in the workspace
 go test ./cli/... ./core/... ./shim/...    # run all tests
 go test ./core/engine/...    # run one package's tests
-go build -o glue.exe ./cli/glue
+go build -o glue-alpha.exe ./cli/glue      # dev build (see isolation below)
 go build -o shim.exe ./shim
 ```
 
 - IMPORTANT: in workspace mode `./...` is **invalid from the `go.work` root** (the
   root is not a module). Always enumerate `./cli/... ./core/... ./shim/...` or
   `cd` into a module first.
+- `go.work` and `go.work.sum` are **committed** (build definition of the monorepo).
+  Never gitignore them.
+
+### Dev / data isolation (IMPORTANT)
+
+- **Never build a dev binary as `glue.exe`.** Build it as `glue-alpha.exe` (or any
+  `glue-<suffix>`). The data root is derived from the executable name:
+  `glue.exe` → `~/.glue`, `glue-alpha.exe` → `~/.glue-alpha`. This keeps dev
+  builds fully isolated from the maintainer's real installation and its data —
+  no manual backup or directory renaming is needed.
+- The hidden `--root` flag overrides the data root (tests use it with temp dirs).
+- Shim runners resolve their config relative to their own location
+  (`<root>/shims/<name>.exe` → `<root>/shims-meta/<name>.json`), with
+  `GLUE_DATA_ROOT` as an optional env override; the legacy `~/.glue` path is only
+  a fallback. Normal installs resolve to exactly the same file as before.
+- Known read-only exception: `core/engine/search_index_php_integration_test.go`
+  reads the real `~/.glue` (skips when the php bucket is absent); it never writes.
 
 - Go **1.26+**, Windows only for runtime. Some tests touch real buckets/downloads; if a
   network-dependent test fails, note it and re-run the package before assuming breakage.
@@ -58,16 +72,8 @@ go build -o shim.exe ./shim
 | Engine operations (install/search/…) | `core/engine/` |
 | Manifests, buckets, CAS, downloads | `core/manifest/`, `core/bucket/`, `core/store/`, `core/downloader/` |
 | Shims | `core/shim/` + top-level `shim/` runner |
-| Roadmap / strategy / decisions | `docs/agent-ready-roadmap.md` |
 
 ## Frozen / out of scope
 
 `web`, `desktop`, `desktop-pro`, `gateway`, `api` are **not** in this repo and are
-frozen by decision (roadmap §5.2). Do not plan work on them.
-
-## Release scheme (decision record, roadmap §8.1)
-
-- Module paths currently stay `github.com/gluestick-sh/*` (unchanged during Phase 0).
-- Planned coordinated switch: `core` moves to vanity path `gluestick.sh/core` together
-  with a go-import meta tag on the website; releases then use subdirectory tags
-  (`core/v0.2.0`, `cli/v0.2.0`, `shim/v0.2.0`). Do not rename module paths ad hoc.
+frozen by decision. Do not plan work on them.

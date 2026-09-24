@@ -2,12 +2,13 @@
 
 > The Gluestick shim runner — a tiny, dependency-free launcher compiled to `shim.exe`.
 
-When [core](https://github.com/gluestick-sh/core) installs a package, it creates
+When [core](../core) installs a package, it creates
 a shim `<name>.exe` on `PATH` for each executable. That shim is a copy of the
 binary built from this project. At launch it:
 
 1. Derives its name from `os.Args[0]` (e.g. `git.exe` -> `git`).
-2. Reads `~/.glue/shims-meta/<name>.json`.
+2. Reads its config from `shims-meta/<name>.json`, resolved relative to the shim's
+   own location (e.g. `~/.glue/shims-meta/<name>.json`).
 3. Execs the real target with the configured args/env, proxying stdio and
    propagating the child's exit code.
 
@@ -25,7 +26,7 @@ go build -o shim.exe .
 
 The `Config` struct in `main.go` is a shared contract with `core`'s
 `shim.Config`. The on-disk JSON is written by `core`; keep the field names in
-sync across both projects:
+sync across both modules:
 
 ```json
 {

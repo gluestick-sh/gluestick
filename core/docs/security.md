@@ -38,7 +38,7 @@ buckets, SQLite indexes, and install trees.
 
 ## Path safety (install)
 
-As of the current release line, **core** rejects manifest-relative paths
+**core** rejects manifest-relative paths
 containing `..` or absolute segments for:
 
 - `extract_to` / `extract_dir` layout
