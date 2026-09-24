@@ -1,0 +1,15 @@
+# Go build outputs
+*.exe
+*.exe~
+
+# NSIS installer staging
+installer/payload/
+installer/output/
+
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.cursorrules

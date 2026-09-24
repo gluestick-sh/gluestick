@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Sync workspace
+        run: go work sync
+
+      # Note: in workspace mode, "./..." from the go.work root is not a valid
+      # pattern when the root itself is not a module. Enumerate module dirs.
+      - name: Vet
+        run: go vet ./cli/... ./core/... ./shim/...
+
+      - name: Build all modules
+        run: go build ./cli/... ./core/... ./shim/...
+
+      - name: Build glue.exe and shim.exe
+        run: |
+          go build -o glue.exe ./cli/glue
+          go build -o shim.exe ./shim
+
+      - name: Test all modules
+        run: go test ./cli/... ./core/... ./shim/...

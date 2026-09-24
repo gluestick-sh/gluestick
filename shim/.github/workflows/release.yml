@@ -1,0 +1,228 @@
+# Tag push: test → build → GitHub Release → https://gluestick.sh/releases/shim/
+# Manual: workflow_dispatch with an existing tag to re-sync that release to the site.
+#
+# Secrets (org recommended): GLUESTICK_SSH_HOST, GLUESTICK_SSH_PORT,
+#   GLUESTICK_SSH_USER, GLUESTICK_SSH_KEY, GLUESTICK_SSH_PATH,
+#   optional GLUESTICK_SSH_PASSPHRASE / GLUESTICK_SSH_KNOWN_HOSTS
+# Upload target: $GLUESTICK_SSH_PATH/shim/ → https://gluestick.sh/releases/shim/
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to sync to gluestick.sh (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    if: github.event_name == 'push'
+    name: test + smoke (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Build and smoke (amd64)
+        shell: pwsh
+        run: |
+          go build -o shim.exe .
+          if (-not (Test-Path shim.exe)) { throw "shim.exe not found" }
+
+  build:
+    if: github.event_name == 'push'
+    name: build shim-${{ matrix.goarch }}.exe
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - name: Build shim.exe
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          out="shim-windows-${{ matrix.goarch }}.exe"
+          go build -trimpath -ldflags "-s -w" -o "$out" .
+          sha256sum "$out" | awk '{print $1}' > "$out.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shim-windows-${{ matrix.goarch }}
+          path: |
+            shim-windows-${{ matrix.goarch }}.exe
+            shim-windows-${{ matrix.goarch }}.exe.sha256
+
+  release:
+    if: github.event_name == 'push'
+    name: publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: shim-windows-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shim-release
+          path: |
+            dist/shim-windows-amd64.exe
+            dist/shim-windows-arm64.exe
+            dist/shim-windows-amd64.exe.sha256
+            dist/shim-windows-arm64.exe.sha256
+          if-no-files-found: error
+
+  sync-web:
+    if: github.event_name == 'workflow_dispatch'
+    name: sync from existing release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG" -R "${{ github.repository }}" -D dist \
+            -p 'shim-windows-amd64.exe' \
+            -p 'shim-windows-arm64.exe' \
+            -p 'shim-windows-amd64.exe.sha256' \
+            -p 'shim-windows-arm64.exe.sha256'
+          ls -la dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shim-release
+          path: |
+            dist/shim-windows-amd64.exe
+            dist/shim-windows-arm64.exe
+            dist/shim-windows-amd64.exe.sha256
+            dist/shim-windows-arm64.exe.sha256
+          if-no-files-found: error
+
+  publish-web:
+    name: publish to gluestick.sh
+    runs-on: ubuntu-latest
+    needs: [release, sync-web]
+    if: |
+      always() && !cancelled() && (
+        needs.release.result == 'success' ||
+        needs.sync-web.result == 'success'
+      )
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: shim-release
+          path: dist
+
+      - name: Setup SSH
+        env:
+          SSH_HOST: ${{ secrets.GLUESTICK_SSH_HOST }}
+          SSH_PORT: ${{ secrets.GLUESTICK_SSH_PORT }}
+          SSH_KEY: ${{ secrets.GLUESTICK_SSH_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.GLUESTICK_SSH_PASSPHRASE }}
+          SSH_KNOWN_HOSTS: ${{ secrets.GLUESTICK_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Prefer env + printf so multiline PEM secrets stay intact.
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+          # Unlock encrypted keys once for later -i IdentitiesOnly=yes commands.
+          if [ -n "${SSH_PASSPHRASE:-}" ]; then
+            eval "$(ssh-agent -s)"
+            export SSH_PASSPHRASE
+            printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$SSH_PASSPHRASE"' > ~/.ssh/askpass.sh
+            chmod 700 ~/.ssh/askpass.sh
+            DISPLAY=:0 SSH_ASKPASS="$HOME/.ssh/askpass.sh" SSH_ASKPASS_REQUIRE=force \
+              ssh-add ~/.ssh/deploy_key </dev/null
+            echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+            echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          fi
+
+      - name: Test SSH
+        env:
+          SSH_HOST: ${{ secrets.GLUESTICK_SSH_HOST }}
+          SSH_PORT: ${{ secrets.GLUESTICK_SSH_PORT }}
+          SSH_USER: ${{ secrets.GLUESTICK_SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh \
+            -p "${SSH_PORT}" \
+            -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "whoami"
+
+      - name: Deploy to gluestick.sh/releases/shim/
+        env:
+          SSH_HOST: ${{ secrets.GLUESTICK_SSH_HOST }}
+          SSH_PORT: ${{ secrets.GLUESTICK_SSH_PORT }}
+          SSH_USER: ${{ secrets.GLUESTICK_SSH_USER }}
+          SSH_PATH: ${{ secrets.GLUESTICK_SSH_PATH }}
+        run: |
+          set -euo pipefail
+          remote_dir="${SSH_PATH%/}/shim"
+          ssh_opts=(-p "${SSH_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes)
+
+          ls -la dist/shim-windows-*
+
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p $(printf %q "$remote_dir")"
+
+          # scp uses -P for port (capital P).
+          scp \
+            -P "${SSH_PORT}" \
+            -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            dist/shim-windows-amd64.exe \
+            dist/shim-windows-arm64.exe \
+            dist/shim-windows-amd64.exe.sha256 \
+            dist/shim-windows-arm64.exe.sha256 \
+            "${SSH_USER}@${SSH_HOST}:${remote_dir}/"
+
+          echo "public URL: https://gluestick.sh/releases/shim/"
