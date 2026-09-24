@@ -2,7 +2,7 @@
 
 > **Glue** — the agent-ready package manager for Windows. Scoop-compatible manifests, CAS zero-copy installs, parallel downloads, and first-class AI-agent interfaces (`--json`, stable exit codes, and an MCP server).
 
-This is the **monorepo** for the Glue project, created during the *"Agent-Ready on Windows"* pivot (2026-09). Full strategy and phase plan: [`docs/agent-ready-roadmap.md`](docs/agent-ready-roadmap.md).
+This is the **monorepo** for the Glue project, created during the *"Agent-Ready on Windows"* pivot. Full strategy and phase plan: [`docs/agent-ready-roadmap.md`](docs/agent-ready-roadmap.md).
 
 ## Layout
 
@@ -59,17 +59,6 @@ Data directory: `%USERPROFILE%\.glue`
 - Command verbs and Scoop-compatible semantics never break.
 - `--json` output schemas are semver-managed: fields are only added, never renamed or removed in place.
 - Exit codes `0/1/2` never change.
-
-## History
-
-This monorepo started **fresh** in Sep 2026 as the baseline of the *"Agent-Ready on
-Windows"* pivot (a single initial commit — no carried-over history). Pre-pivot
-history and release tags (`cli` v0.1.12, `core` v0.1.12, `shim` v0.1.6) remain
-readable in the original standalone repositories:
-
-- https://github.com/gluestick-sh/cli
-- https://github.com/gluestick-sh/core
-- https://github.com/gluestick-sh/shim
 
 ## License
 
