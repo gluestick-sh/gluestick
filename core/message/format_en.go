@@ -281,6 +281,148 @@ func FormatEN(key string, args map[string]any) string {
 		return "git not available, will be bootstrapped when needed"
 	case DoctorStartupSevenZipNote:
 		return "7z not available, will be bootstrapped when needed"
+	case AgentShimAliasShadowing:
+		return "Microsoft Store python aliases shadow the Glue shim directory"
+	case AgentShimRunnerOK:
+		return "Shim runner is healthy"
+	case AgentShimRunnerMissing:
+		return "Some shims point at missing targets"
+	case AgentInstallBackendOK:
+		return "Install backend is ready (git, 7-Zip)"
+	case AgentInstallBackendMissing:
+		return "Install backend is incomplete"
+	case AgentBucketsOK:
+		return "Buckets are ready for search and install"
+	case AgentBucketsEmpty:
+		return "No bucket is installed"
+	case AgentBucketsNoManifests:
+		return "No indexed package manifest in any bucket"
+	case AgentBucketsIndexNotReady:
+		return "Bucket manifest index is not ready yet"
+	case AgentNetworkSkipped:
+		return "Network checks skipped (--offline)"
+	case AgentToolchainOK:
+		return "Common agent tools are on PATH"
+	case AgentToolchainMissing:
+		return "Some common agent tools are missing"
+	case AgentShimProbeOK:
+		return "An installed shim launched successfully"
+	case AgentShimProbeFailed:
+		return "An installed shim failed to launch"
+	case AgentShimProbeSkipped:
+		return "Shim launch probe skipped"
+	case AgentMCPAvailable:
+		return "MCP server entry point is available"
+	case AgentMCPUnavailable:
+		return "MCP server entry point is not available"
+	case AgentPolicyConfigured:
+		return "Agent policy is configured"
+	case AgentPolicyNotConfigured:
+		return "Agent policy is not configured"
+	case AgentMachineOSOK:
+		return "Operating system is supported"
+	case AgentMachineOSUnsupported:
+		return "Windows build is below the supported floor"
+	case AgentMachineOSUnknown:
+		return "Operating system version is unavailable"
+	case AgentMachineArchOK:
+		return "CPU architecture is supported"
+	case AgentShellPWSHOK:
+		return "PowerShell 7 (pwsh) is available"
+	case AgentShellPWSHMissing:
+		return "PowerShell 7 (pwsh) is not installed"
+	case AgentShellUTF8OK:
+		return "Output encoding is UTF-8"
+	case AgentShellUTF8Not:
+		return "Output encoding is not UTF-8"
+	case AgentShellUTF8NA:
+		return "Console codepage is unavailable"
+	case AgentShellExecPolicyOK:
+		return "PowerShell execution policy allows unsigned scripts"
+	case AgentShellExecPolicyWarn:
+		return "PowerShell execution policy may block unsigned scripts"
+	case AgentShellExecPolicyNA:
+		return "PowerShell execution policy is not applicable"
+	case AgentShellGitBashAbsent:
+		return "Git Bash is not on PATH"
+	case AgentShellGitBashPresent:
+		return "Git Bash is on PATH and may shadow shims"
+	case AgentShellGitBashBehind:
+		return "Git Bash is on PATH but glue shims come first"
+	case AgentShellProfileOK:
+		return "PowerShell profile carries the glue block"
+	case AgentShellProfileMissing:
+		return "PowerShell profile is missing the glue block"
+	case AgentDuplicatesNone:
+		return "No duplicate runtimes on PATH"
+	case AgentDuplicatesFound:
+		return "Multiple installs of the same runtime on PATH"
+	case AgentGitConfigOK:
+		return "Bucket git config is pinned and trusted"
+	case AgentGitConfigBad:
+		return "Bucket git config needs fixes (trust or pinned autocrlf)"
+	case AgentGitConfigNoBuckets:
+		return "No buckets to inspect"
+	case AgentGitConfigNoGit:
+		return "git is not available"
+	case AgentAgentsFound:
+		return "Agent CLIs are on PATH"
+	case AgentAgentsNone:
+		return "No agent CLI is installed on PATH"
+	case AgentWorkspaceFSOK:
+		return "Data root filesystem is NTFS"
+	case AgentWorkspaceFSOther:
+		return "Data root is not on an NTFS filesystem"
+	case AgentWorkspaceFSUnknown:
+		return "Data root filesystem is unknown"
+	case AgentWorkspaceWSLAbsent:
+		return "WSL is not installed"
+	case AgentWorkspaceWSLPresent:
+		return "WSL is installed"
+	case AgentWorkspacePathOK:
+		return "Data root is on a local fixed drive"
+	case AgentWorkspacePathBad:
+		return "Data root is on a UNC, WSL, or network path"
+	case AgentHintShimAlias:
+		return "Run glue path setup to put the shim directory first on PATH"
+	case AgentHintShimRunner:
+		return "Reinstall the affected packages to recreate their shims"
+	case AgentHintInstallBackend:
+		return "git and 7-Zip are downloaded automatically on first use; check network access"
+	case AgentHintBuckets:
+		return "Run glue bucket add main to install a bucket"
+	case AgentHintToolchain:
+		return "Install missing tools with glue install (for example: glue install nodejs)"
+	case AgentHintShimProbe:
+		return "Check that glue path setup ran and the target executable still exists"
+	case AgentHintMCP:
+		return "Run glue mcp (stdio) and register that command in your MCP client"
+	case AgentHintPolicy:
+		return "Policy gates (deny/protected/confirm) arrive with the MCP phase (roadmap 4.6.2)"
+	case AgentHintMachineOS:
+		return "Upgrade to a supported Windows build (Windows 10 1809 or later)"
+	case AgentHintPWSH:
+		return "Run glue install pwsh, or glue doctor --fix"
+	case AgentHintUTF8:
+		return "Run chcp 65001, or enable Beta: Use Unicode UTF-8 for worldwide language support"
+	case AgentHintExecPolicy:
+		return "Run Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+	case AgentHintGitBash:
+		return "Run glue path setup so glue shims stay before Git Bash (or remove Git Bash from PATH)"
+	case AgentHintShellProfile:
+		return "Run glue doctor --fix to add the glue block (PATH, UTF-8) to your PowerShell profile"
+	case AgentHintDuplicates:
+		return "Keep exactly one install of each tool on PATH; glue doctor --fix only reports duplicates"
+	case AgentHintGitConfig:
+		return "Run glue doctor --fix to trust the bucket directory and pin its local git config"
+	case AgentHintAgents:
+		return "Install an agent CLI (for example: npm install -g @anthropic-ai/claude-code)"
+	case AgentHintWorkspaceFS:
+		return "Move the data root to an NTFS volume (FAT filenames break some packages)"
+	case AgentHintWorkspaceWSL:
+		return "Run glue and agents on the Windows side; avoid \\wsl$ workspace paths"
+	case AgentHintWorkspacePath:
+		return "Use a local fixed drive for the data root (GLUE_DATA_ROOT) and the workspace"
 	case ErrInvalidLaunchPath:
 		return "Invalid executable path"
 	case ErrLaunchUnsupportedType:

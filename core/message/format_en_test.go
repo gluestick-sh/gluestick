@@ -29,6 +29,12 @@ var knownKeys = []string{
 	GitPulling,
 	DoctorGitMissing,
 	DoctorHintGitInstall,
+	AgentBucketsEmpty,
+	AgentShimProbeSkipped,
+	AgentHintBuckets,
+	AgentShellProfileMissing,
+	AgentDuplicatesFound,
+	AgentGitConfigBad,
 	ErrLaunchNotOpenable,
 }
 

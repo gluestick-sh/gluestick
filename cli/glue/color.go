@@ -5,10 +5,11 @@
 import "github.com/gluestick-sh/core/config"
 
 const (
-	ansiReset = "\033[0m"
-	ansiGreen = "\033[32m"
-	ansiRed   = "\033[31m"
-	ansiBlue  = "\033[34m"
+	ansiReset  = "\033[0m"
+	ansiGreen  = "\033[32m"
+	ansiRed    = "\033[31m"
+	ansiBlue   = "\033[34m"
+	ansiYellow = "\033[33m"
 )
 
 var (
@@ -16,8 +17,11 @@ var (
 	colorGreen  string
 	colorRed    string
 	colorBlue   string
+	colorYellow string
 	markFail    string
 	markSuccess string
+	markWarn    string
+	markSkip    string
 )
 
 func init() {
@@ -30,15 +34,19 @@ func setColorEnabled(enabled bool) {
 		colorGreen = ansiGreen
 		colorRed = ansiRed
 		colorBlue = ansiBlue
+		colorYellow = ansiYellow
 		initConsoleColor()
 	} else {
 		colorReset = ""
 		colorGreen = ""
 		colorRed = ""
 		colorBlue = ""
+		colorYellow = ""
 	}
 	markFail = colorRed + "✗" + colorReset
 	markSuccess = colorGreen + "✓" + colorReset
+	markWarn = colorYellow + "⚠" + colorReset
+	markSkip = colorBlue + "—" + colorReset
 }
 
 func colorEnabledFromConfig(cfg *config.Basics) bool {

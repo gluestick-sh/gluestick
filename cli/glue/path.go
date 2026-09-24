@@ -4,8 +4,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 
+	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/shim"
 	"github.com/spf13/cobra"
 )
@@ -85,11 +85,7 @@ var pathCheckCmd = &cobra.Command{
 // storeAliasShadowsShims reports whether the Microsoft Store python aliases directory
 // precedes the glue shims dir on PATH (shims would be shadowed by Store aliases).
 func storeAliasShadowsShims(binDir string) bool {
-	apps := windowsAppsDir()
-	if apps == "" {
-		return false
-	}
-	return pathDirPrecedes(os.Getenv("PATH"), apps, binDir)
+	return engine.StoreAliasShadowsShims(binDir)
 }
 
 var pathSetupCmd = &cobra.Command{

@@ -29,6 +29,12 @@ type DoctorCheck struct {
 	DetailText string `json:"detail,omitempty"`
 	HintKey    string `json:"hintKey,omitempty"`
 	Hint       string `json:"hint,omitempty"`
+
+	// Agent readiness additions used by glue doctor's default view; left empty by --env checks.
+	Level  string         `json:"level,omitempty"`  // AgentLevelBlocking | AgentLevelAdvisory
+	Status string         `json:"status,omitempty"` // AgentStatusPass | AgentStatusFail | AgentStatusSkipped
+	Group  string         `json:"group,omitempty"`  // machine | shell | runtime | agents | workspace | glue
+	Data   map[string]any `json:"data,omitempty"`   // machine-readable facts behind the verdict
 }
 
 // DoctorReport is an environment diagnosis report.

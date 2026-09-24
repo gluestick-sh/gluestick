@@ -1,4 +1,4 @@
-﻿// Command glue is the Scoop-compatible CLI for installing and managing packages via github.com/gluestick-sh/core/engine.
+// Command glue is the Scoop-compatible CLI for installing and managing packages via github.com/gluestick-sh/core/engine.
 package main
 
 import (
@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
-	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/cli/version"
+	"github.com/gluestick-sh/core/engine"
+	"github.com/spf13/cobra"
 )
 
 // errReported indicates failure was already printed; suppress duplicate summaries in Execute.
@@ -121,19 +121,21 @@ func initConfig() {
 		applyConfig(nil)
 	}
 
-	// Quiet notes for git/7z when missing; skip on glue doctor (reported there instead).
-	if !isDoctorCommand() && !jsonOutputEnabled() {
+	// Quiet notes for git/7z when missing; skip when the command's own report covers them.
+	if !suppressesStartupToolNotes(os.Args[1:]) && !jsonOutputEnabled() {
 		engine.WriteStartupToolNotes(os.Stderr, glueRoot())
 	}
 }
 
-// isDoctorCommand reports whether the CLI was invoked as glue doctor.
-func isDoctorCommand() bool {
-	for _, arg := range os.Args[1:] {
+// suppressesStartupToolNotes reports whether the invocation is glue doctor or
+// glue env: both report git/7z health themselves, so startup notes would be
+// duplicate noise.
+func suppressesStartupToolNotes(args []string) bool {
+	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		return arg == "doctor"
+		return arg == "doctor" || arg == "env" || arg == "mcp"
 	}
 	return false
 }

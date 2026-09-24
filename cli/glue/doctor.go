@@ -8,20 +8,42 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// doctorCmd runs environment checks (data dir, git, 7z, shims, GitHub, etc.).
+// doctorCmd reports machine readiness: "is this machine agent-ready?" with a
+// zero-interaction verdict (exit 0/1, --json for machines). The traditional
+// environment checks live in `glue env`.
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check Glue environment and dependencies",
-	RunE:  runDoctor,
+	Short: "Check agent readiness",
+	// Cobra errors are silenced so a not-ready verdict keeps stderr empty; the
+	// argument hint therefore prints itself and still exits 2 (usage error).
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "glue doctor takes no arguments (got %q)\n", args[0])
+			return wrapUsageError(fmt.Errorf("accepts 0 arg(s), received %d", len(args)))
+		}
+		return nil
+	},
+	RunE: runDoctor,
 }
 
 func init() {
 	rootCmd.AddCommand(doctorCmd)
 	doctorCmd.SilenceUsage = true
 	doctorCmd.SilenceErrors = true
+	doctorCmd.Flags().Bool("offline", false, "skip network probes (readiness mode: the network check reports skipped)")
+	doctorCmd.Flags().Bool("probe-shim", false, "launch one installed shim to prove tools can run (readiness mode)")
+	doctorCmd.Flags().Bool("fix", false, "apply safe fixes (PATH, buckets, UTF-8, PowerShell, git, profiles) and re-check (readiness mode)")
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
+	offline, _ := cmd.Flags().GetBool("offline")
+	probeShim, _ := cmd.Flags().GetBool("probe-shim")
+	fix, _ := cmd.Flags().GetBool("fix")
+	return runReadinessDoctor(cmd, offline, probeShim, fix)
+}
+
+// runEnvDoctor runs the traditional environment report behind `glue env`.
+func runEnvDoctor(cmd *cobra.Command) error {
 	config := &engine.EngineConfig{
 		RootDir: glueRoot(),
 		Workers: 1,

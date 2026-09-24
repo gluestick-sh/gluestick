@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gluestick-sh/core/engine"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -112,26 +113,12 @@ func disableWindowsPythonAliases() {
 	}
 }
 
+// windowsAppsDir delegates to core so PATH diagnostics share one implementation.
 func windowsAppsDir() string {
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
-		return ""
-	}
-	return filepath.Join(localAppData, "Microsoft", "WindowsApps")
+	return engine.WindowsAppsDir()
 }
 
+// pathDirPrecedes delegates to core so PATH ordering checks share one implementation.
 func pathDirPrecedes(pathList, earlier, later string) bool {
-	earlier = strings.TrimRight(earlier, `\`)
-	later = strings.TrimRight(later, `\`)
-	sawEarlier := false
-	for _, p := range filepath.SplitList(pathList) {
-		p = strings.TrimRight(strings.TrimSpace(p), `\`)
-		if strings.EqualFold(p, later) {
-			return sawEarlier
-		}
-		if strings.EqualFold(p, earlier) {
-			sawEarlier = true
-		}
-	}
-	return false
+	return engine.PathDirPrecedes(pathList, earlier, later)
 }
