@@ -4,8 +4,9 @@
 *.exe
 *.test
 *.out
-dist/
-build/
+/dist/
+/build/
+/docs/
 
 # Agent/IDE local state
 .claude/
