@@ -25,6 +25,7 @@ type configFile struct {
 	ParallelDownload           *bool                               `json:"parallel_download,omitempty"`
 	Color                      *bool                               `json:"color,omitempty"`
 	Agent                      *AgentSettings                      `json:"agent,omitempty"`
+	Audit                      *AuditSettings                      `json:"audit,omitempty"`
 }
 
 // Basics holds config.json keys managed by the glue config CLI.
@@ -107,6 +108,88 @@ func WriteAgent(rootDir string, settings AgentSettings) error {
 	}
 	normalized := NormalizeAgentSettings(settings)
 	cfg.Agent = &normalized
+	return writeConfigFile(rootDir, cfg)
+}
+
+// AuditSettings is the "audit" section of config.json: the rotation thresholds
+// for the append-only hash-chained trail (`<root>/logs/audit.jsonl`, §4.6.1).
+//
+// MaxBytes: 0 (unset) means DefaultAuditMaxBytes; a negative value disables
+// size-based rotation, so the active file grows without bound.
+// KeepSegments: 0 (unset) means DefaultAuditKeepSegments; a negative value
+// keeps every rotated segment.
+type AuditSettings struct {
+	MaxBytes     int64 `json:"max_bytes,omitempty"`
+	KeepSegments int   `json:"keep_segments,omitempty"`
+}
+
+const (
+	// DefaultAuditMaxBytes is the rotation threshold used when config.json does
+	// not set audit.max_bytes (8 MiB).
+	DefaultAuditMaxBytes int64 = 8 << 20
+	// DefaultAuditKeepSegments is the retained rotated-segment count used when
+	// config.json does not set audit.keep_segments.
+	DefaultAuditKeepSegments = 5
+	// MaxAuditKeepSegments caps how many segments config.json may retain so a
+	// typo cannot pin unbounded disk usage.
+	MaxAuditKeepSegments = 100
+	// AuditRotationDisabled assigned to AuditSettings.MaxBytes stops rotation.
+	AuditRotationDisabled int64 = -1
+	// AuditKeepAllSegments assigned to AuditSettings.KeepSegments retains every
+	// rotated segment.
+	AuditKeepAllSegments = -1
+)
+
+// DefaultAuditSettings is the built-in rotation policy (8 MiB, 5 segments).
+func DefaultAuditSettings() AuditSettings {
+	return AuditSettings{MaxBytes: DefaultAuditMaxBytes, KeepSegments: DefaultAuditKeepSegments}
+}
+
+// NormalizeAuditSettings fills unset (zero) fields with their defaults and caps
+// the retained-segment count. Negative values are meaningful sentinels and
+// survive normalization.
+func NormalizeAuditSettings(s AuditSettings) AuditSettings {
+	out := s
+	if out.MaxBytes == 0 {
+		out.MaxBytes = DefaultAuditMaxBytes
+	}
+	switch {
+	case out.KeepSegments == 0:
+		out.KeepSegments = DefaultAuditKeepSegments
+	case out.KeepSegments > MaxAuditKeepSegments:
+		out.KeepSegments = MaxAuditKeepSegments
+	}
+	return out
+}
+
+// RotationEnabled reports whether size-based rotation is active.
+func (a AuditSettings) RotationEnabled() bool { return a.MaxBytes > 0 }
+
+// PruneEnabled reports whether rotated segments are pruned past the keep count.
+func (a AuditSettings) PruneEnabled() bool { return a.KeepSegments >= 0 }
+
+// ReadAudit returns the normalized audit settings from config.json. A missing
+// file or missing "audit" section yields DefaultAuditSettings.
+func ReadAudit(rootDir string) (AuditSettings, error) {
+	cfg, err := readConfigFile(rootDir)
+	if err != nil {
+		return AuditSettings{}, err
+	}
+	if cfg.Audit == nil {
+		return DefaultAuditSettings(), nil
+	}
+	return NormalizeAuditSettings(*cfg.Audit), nil
+}
+
+// WriteAudit updates the audit section while preserving every other config key
+// (`glue config set audit.*`).
+func WriteAudit(rootDir string, settings AuditSettings) error {
+	cfg, err := readConfigFile(rootDir)
+	if err != nil {
+		return err
+	}
+	normalized := NormalizeAuditSettings(settings)
+	cfg.Audit = &normalized
 	return writeConfigFile(rootDir, cfg)
 }
 

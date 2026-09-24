@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gluestick-sh/core/bucket"
@@ -32,9 +33,13 @@ var configGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		audit, err := config.ReadAudit(root)
+		if err != nil {
+			return err
+		}
 
 		key := args[0]
-		value, set, err := configResolvedValue(cfg, agent, key)
+		value, set, err := configResolvedValue(cfg, agent, audit, key)
 		if err != nil {
 			return emitConfigError("config_get", key, err)
 		}
@@ -86,6 +91,25 @@ var configSetCmd = &cobra.Command{
 			return nil
 		}
 
+		if isAuditConfigKey(key) {
+			audit, err := config.ReadAudit(root)
+			if err != nil {
+				return emitConfigError("config_set", key, err)
+			}
+			stored, err := setAuditConfigValue(&audit, key, value)
+			if err != nil {
+				return emitConfigError("config_set", key, err)
+			}
+			if err := config.WriteAudit(root, audit); err != nil {
+				return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
+			}
+			if jsonOutputEnabled() {
+				return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
+			}
+			fmt.Printf("Set %s = %v\n", key, stored)
+			return nil
+		}
+
 		var stored any
 		switch key {
 		case "github_proxy":
@@ -114,7 +138,7 @@ var configSetCmd = &cobra.Command{
 			cfg.Color = &enabled
 		default:
 			return emitConfigError("config_set", key, fmt.Errorf(
-				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected", key))
+				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected\n  audit.max_bytes\n  audit.keep_segments", key))
 		}
 
 		if err := saveConfig(root, cfg); err != nil {
@@ -162,6 +186,26 @@ var configUnsetCmd = &cobra.Command{
 			}
 			resetAgentConfigValue(&agent, key)
 			if err := config.WriteAgent(root, agent); err != nil {
+				return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
+			}
+			if jsonOutputEnabled() {
+				return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": true})
+			}
+			fmt.Printf("Unset %s\n", key)
+			return nil
+		}
+
+		if isAuditConfigKey(key) {
+			audit, err := config.ReadAudit(root)
+			if err != nil {
+				return emitConfigError("config_unset", key, err)
+			}
+			_, _, err = resolveAuditConfigValue(audit, key)
+			if err != nil {
+				return emitConfigError("config_unset", key, err)
+			}
+			resetAuditConfigValue(&audit, key)
+			if err := config.WriteAudit(root, audit); err != nil {
 				return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
 			}
 			if jsonOutputEnabled() {
@@ -244,6 +288,10 @@ var configListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		audit, err := config.ReadAudit(root)
+		if err != nil {
+			return err
+		}
 
 		if jsonOutputEnabled() {
 			parallel, parallelSet := configTriBool(cfg.ParallelDownload, true)
@@ -263,6 +311,8 @@ var configListCmd = &cobra.Command{
 				"agent_policy_mode":      agent.Policy.Mode,
 				"agent_policy_deny":      agent.Policy.Deny,
 				"agent_policy_protected": agent.Policy.Protected,
+				"audit_max_bytes":        audit.MaxBytes,
+				"audit_keep_segments":    audit.KeepSegments,
 			})
 		}
 		fmt.Printf("%sConfiguration:%s\n", colorBlue, colorReset)
@@ -278,6 +328,8 @@ var configListCmd = &cobra.Command{
 		fmt.Printf("  agent.policy.mode = %s\n", agent.Policy.Mode)
 		fmt.Printf("  agent.policy.deny = %s\n", strings.Join(agent.Policy.Deny, ","))
 		fmt.Printf("  agent.policy.protected = %s\n", strings.Join(agent.Policy.Protected, ","))
+		fmt.Printf("  audit.max_bytes = %d\n", audit.MaxBytes)
+		fmt.Printf("  audit.keep_segments = %d\n", audit.KeepSegments)
 
 		return nil
 	},
@@ -315,9 +367,12 @@ func emitConfigError(command, key string, err error) error {
 
 // configResolvedValue returns the resolved value and set flag for a config key.
 // Boolean keys resolve to real booleans (defaults applied); github_proxy is a string.
-func configResolvedValue(cfg *config.Basics, agent config.AgentSettings, key string) (any, bool, error) {
+func configResolvedValue(cfg *config.Basics, agent config.AgentSettings, audit config.AuditSettings, key string) (any, bool, error) {
 	if isAgentConfigKey(key) {
 		return resolveAgentConfigValue(agent, key)
+	}
+	if isAuditConfigKey(key) {
+		return resolveAuditConfigValue(audit, key)
 	}
 	switch key {
 	case "github_proxy":
@@ -420,6 +475,71 @@ func splitConfigList(value string) []string {
 	return out
 }
 
+// auditConfigKeys are the config.json audit keys exposed by `glue config`.
+// Both keys report as "set" because the reader always resolves defaults.
+var auditConfigKeys = map[string]bool{
+	"audit.max_bytes":     true,
+	"audit.keep_segments": true,
+}
+
+func isAuditConfigKey(key string) bool { return auditConfigKeys[key] }
+
+// resolveAuditConfigValue returns the value and set flag for an audit key.
+func resolveAuditConfigValue(settings config.AuditSettings, key string) (any, bool, error) {
+	switch key {
+	case "audit.max_bytes":
+		return settings.MaxBytes, true, nil
+	case "audit.keep_segments":
+		return settings.KeepSegments, true, nil
+	}
+	return nil, false, fmt.Errorf("unknown config key: %s", key)
+}
+
+// setAuditConfigValue mutates one audit key from its CLI string form. Because a
+// leading "-" would be parsed as a flag by cobra, the negative sentinels are
+// also reachable as keywords: `off` (disable rotation) and `all` (keep every
+// segment). Literal negatives still work after a `--` separator.
+func setAuditConfigValue(settings *config.AuditSettings, key, value string) (any, error) {
+	raw := strings.ToLower(strings.TrimSpace(value))
+	switch key {
+	case "audit.max_bytes":
+		if raw == "off" || raw == "none" || raw == "disabled" {
+			settings.MaxBytes = config.AuditRotationDisabled
+			return settings.MaxBytes, nil
+		}
+		maxBytes, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("audit.max_bytes must be a whole number of bytes, or off to disable rotation")
+		}
+		settings.MaxBytes = maxBytes
+		return config.NormalizeAuditSettings(*settings).MaxBytes, nil
+	case "audit.keep_segments":
+		if raw == "all" || raw == "unlimited" {
+			settings.KeepSegments = config.AuditKeepAllSegments
+			return settings.KeepSegments, nil
+		}
+		keep, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("audit.keep_segments must be a whole number, or all to keep every segment")
+		}
+		if keep > config.MaxAuditKeepSegments {
+			return nil, fmt.Errorf("audit.keep_segments must be <= %d", config.MaxAuditKeepSegments)
+		}
+		settings.KeepSegments = keep
+		return config.NormalizeAuditSettings(*settings).KeepSegments, nil
+	}
+	return nil, fmt.Errorf("unknown config key: %s", key)
+}
+
+// resetAuditConfigValue restores one audit key to its built-in default.
+func resetAuditConfigValue(settings *config.AuditSettings, key string) {
+	switch key {
+	case "audit.max_bytes":
+		settings.MaxBytes = config.DefaultAuditMaxBytes
+	case "audit.keep_segments":
+		settings.KeepSegments = config.DefaultAuditKeepSegments
+	}
+}
 // formatConfigValue renders a resolved config value for text mode.
 func formatConfigValue(key string, value any) string {
 	switch v := value.(type) {

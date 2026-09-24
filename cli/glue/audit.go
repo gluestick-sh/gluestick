@@ -79,6 +79,9 @@ func runAuditVerify(cmd *cobra.Command, _ []string) error {
 	}
 	if result.OK {
 		fmt.Printf("%s Audit chain OK (%d entries).\n", markSuccess, result.Entries)
+		if result.Anchor != "" {
+			fmt.Printf("  (oldest segments were pruned; chain verified from anchor %s)\n", auditHashShort(result.Anchor))
+		}
 		return nil
 	}
 	fmt.Printf("%s Audit chain broken at entry %d: %s\n", markFail, result.BrokenAt, result.Reason)
@@ -117,4 +120,12 @@ func runAuditList(cmd *cobra.Command, _ []string) error {
 			entry["package_name"], entry["actor"])
 	}
 	return nil
+}
+
+// auditHashShort abbreviates a chain hash for stderr/text output.
+func auditHashShort(hash string) string {
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12] + "..."
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gluestick-sh/core/config"
 )
 
 // TestRecordAudit_sqliteAndJSONL pins the §4.6.1 contract: every audited
@@ -117,18 +119,18 @@ func TestAuditConcurrentAppends_chainIntact(t *testing.T) {
 	}
 }
 
-// continues across segments and QueryAuditJSONL reads them all.
+// TestAuditRotation_chainAcrossSegments covers the configurable thresholds in
+// config.json ("audit.max_bytes"): rotation keeps the chain intact and
+// QueryAuditJSONL reads every segment.
 func TestAuditRotation_chainAcrossSegments(t *testing.T) {
-	oldMax := auditLogMaxBytes
-	auditLogMaxBytes = 200
-	t.Cleanup(func() { auditLogMaxBytes = oldMax })
-
 	root := t.TempDir()
 	eng, err := NewEngine(&EngineConfig{RootDir: root})
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{MaxBytes: 200})
+
 	for i := 0; i < 3; i++ {
 		if err := eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", nil); err != nil {
 			t.Fatalf("RecordAudit(%d): %v", i, err)
@@ -147,8 +149,130 @@ func TestAuditRotation_chainAcrossSegments(t *testing.T) {
 	if err != nil || !result.OK || result.Entries != 3 {
 		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK with 3 entries", result, err)
 	}
+	if result.Anchor != "" {
+		t.Fatalf("anchor = %q, want empty while no segment was pruned", result.Anchor)
+	}
 	entries, err := eng.QueryAuditJSONL("", "", "", 10)
 	if err != nil || len(entries) != 3 {
 		t.Fatalf("QueryAuditJSONL = %d entries (err=%v), want 3", len(entries), err)
+	}
+}
+
+// TestAuditRotation_pruneKeepsVerifyGreen pins the retention contract: pruning
+// keeps only audit.keep_segments segments and the anchor sidecar lets
+// `glue audit verify` keep walking the surviving chain, while a hand-deleted
+// segment is still reported as a break.
+func TestAuditRotation_pruneKeepsVerifyGreen(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{MaxBytes: 200, KeepSegments: 2})
+
+	for i := 0; i < 12; i++ {
+		if err := eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", nil); err != nil {
+			t.Fatalf("RecordAudit(%d): %v", i, err)
+		}
+	}
+
+	segments, err := filepath.Glob(filepath.Join(root, "logs", "audit-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(segments) != 2 {
+		t.Fatalf("segments = %d, want 2 after pruning", len(segments))
+	}
+	if _, err := os.Stat(filepath.Join(root, "logs", "audit.anchor")); err != nil {
+		t.Fatalf("stat audit.anchor: %v", err)
+	}
+
+	result, err := eng.VerifyAuditLog()
+	if err != nil || !result.OK || result.Anchor == "" {
+		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK anchored at the pruned chain head", result, err)
+	}
+
+	// Deleting a surviving segment by hand leaves a gap the anchor does not
+	// cover, so verification must fail instead of silently passing.
+	if err := os.Remove(segments[0]); err != nil {
+		t.Fatalf("remove segment: %v", err)
+	}
+	result, err = eng.VerifyAuditLog()
+	if err != nil {
+		t.Fatalf("VerifyAuditLog after delete: %v", err)
+	}
+	if result.OK {
+		t.Fatalf("VerifyAuditLog = %+v, want broken after a manual segment delete", result)
+	}
+}
+
+// TestAuditRotation_disabledByConfig pins the negative sentinel: with
+// audit.max_bytes < 0 the active file grows without rotating.
+func TestAuditRotation_disabledByConfig(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{MaxBytes: config.AuditRotationDisabled})
+
+	for i := 0; i < 5; i++ {
+		details := map[string]any{"filler": strings.Repeat("x", 500)}
+		if err := eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", details); err != nil {
+			t.Fatalf("RecordAudit(%d): %v", i, err)
+		}
+	}
+
+	segments, err := filepath.Glob(filepath.Join(root, "logs", "audit-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("segments = %d, want none while rotation is disabled", len(segments))
+	}
+	if result, err := eng.VerifyAuditLog(); err != nil || !result.OK || result.Entries != 5 {
+		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK with 5 entries", result, err)
+	}
+}
+
+// TestAuditRotation_keepAllSegments pins audit.keep_segments < 0: rotation still
+// happens, but nothing is pruned.
+func TestAuditRotation_keepAllSegments(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{MaxBytes: 200, KeepSegments: config.AuditKeepAllSegments})
+
+	for i := 0; i < 6; i++ {
+		if err := eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", nil); err != nil {
+			t.Fatalf("RecordAudit(%d): %v", i, err)
+		}
+	}
+
+	segments, err := filepath.Glob(filepath.Join(root, "logs", "audit-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(segments) != 5 {
+		t.Fatalf("segments = %d, want all 5 rotated segments retained", len(segments))
+	}
+	if _, err := os.Stat(filepath.Join(root, "logs", "audit.anchor")); !os.IsNotExist(err) {
+		t.Fatalf("audit.anchor err = %v, want no anchor while nothing is pruned", err)
+	}
+	if result, err := eng.VerifyAuditLog(); err != nil || !result.OK || result.Entries != 6 {
+		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK with 6 entries", result, err)
+	}
+}
+
+// writeAuditSettings pins config.json's audit section for a test root.
+func writeAuditSettings(t *testing.T, root string, settings config.AuditSettings) {
+	t.Helper()
+	if err := config.WriteAudit(root, settings); err != nil {
+		t.Fatalf("WriteAudit: %v", err)
 	}
 }

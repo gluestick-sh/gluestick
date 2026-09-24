@@ -208,7 +208,8 @@ command exits 1 when any ref failed.
 
 `config_list` keys: `github_proxy(+_set)`, `parallel_download(+_set)`,
 `color(+_set)`, `verbose(+_set)`, `agent_auto_yes`, `agent_policy_mode`,
-`agent_policy_deny`, `agent_policy_protected`.
+`agent_policy_deny`, `agent_policy_protected`, `audit_max_bytes`,
+`audit_keep_segments`.
 
 ## bucket
 
@@ -245,7 +246,9 @@ command exits 1 when any ref failed.
   carry `prev`/`hash`.
 - `sqlite` entries come from `activity_log`; `jsonl` reads the rotating,
   hash-chained `<root>/logs/audit.jsonl` (+ segments).
-- `glue audit verify` → `{ "ok": true, "entries": 2 }`; a break reports
+- `glue audit verify` → `{ "ok": true, "entries": 2 }`; after segments were
+  pruned it also reports `anchor` (the chain head the surviving entries start
+  from). A break reports
   `{ "ok": false, "entries": 1, "brokenAt": 2, "reason": "hash mismatch" }`.
 
 ## MCP tools

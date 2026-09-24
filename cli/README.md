@@ -61,12 +61,12 @@ Data directory: `%USERPROFILE%\.glue`
 | `glue home <pkg>` | Open package homepage in browser |
 | `glue bucket add/list/update/check/known` | Manage Scoop buckets |
 | `glue cache list/clear/gc/rebuild` | Cache index and orphan blob GC |
-| `glue config get/set/unset/list` | Settings in `~/.glue/config.json` (`github_proxy`, `parallel_download`, `color`, `verbose`, `agent.auto_yes`, `agent.policy.mode/deny/protected`) |
+| `glue config get/set/unset/list` | Settings in `~/.glue/config.json` (`github_proxy`, `parallel_download`, `color`, `verbose`, `agent.auto_yes`, `agent.policy.mode/deny/protected`, `audit.max_bytes`, `audit.keep_segments`) |
 | `glue doctor` | Grouped agent-readiness report with score (default; `--json`, `--offline`, `--probe-shim`); `--fix` lists and applies safe fixes one by one (PATH, buckets, UTF-8, PowerShell, git, profiles) then re-checks |
 | `glue env` | Traditional environment checks (data dir, git, 7z, shims, GitHub); JSON report |
 | `glue mcp` | MCP server over stdio: read tools `glue_search` / `glue_list` / `glue_info` / `glue_depends` / `glue_path_check` / `glue_bucket_list` / `glue_doctor`; write tools `glue_install` / `glue_uninstall` / `glue_update` / `glue_bucket_add` / `glue_bucket_update` + `glue_confirm` (confirm token; `agent.auto_yes=true` skips, `agent.policy` deny/protected always wins, `glue hold` blocks uninstall) |
 | `glue audit list` | Query the audit trail (`--source cli|mcp`, `--package`, `--since`, `--limit`, `--jsonl`); JSON `{entries,count,format}` |
-| `glue audit verify` | Verify the append-only `logs/audit.jsonl` hash chain; exit 1 when tampered |
+| `glue audit verify` | Verify the append-only `logs/audit.jsonl` hash chain (rotated segments included; anchored after pruning); exit 1 when tampered |
 | `glue path show/check/setup` | PATH shim registration |
 | `glue reset <pkg>` | Reset package to default version |
 | `glue completion bash\|zsh\|fish\|powershell` | Generate shell completion script |

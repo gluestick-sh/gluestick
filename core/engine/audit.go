@@ -12,16 +12,48 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/gluestick-sh/core/config"
 	"github.com/gluestick-sh/core/verbose"
 )
 
-// auditLogMaxBytes rotates audit.jsonl once it grows past this size, and
-// auditSegmentKeep bounds how many rotated segments are retained.
-var auditLogMaxBytes int64 = 8 << 20
+// auditSettingsMemo caches the config.json audit thresholds per data root so
+// appends do not re-read the file, while still noticing edits (modtime+size).
+type auditSettingsMemo struct {
+	settings config.AuditSettings
+	modTime  time.Time
+	size     int64
+}
 
-const auditSegmentKeep = 5
+var auditSettingsCache sync.Map // data root -> auditSettingsMemo
+
+// auditSettingsFor returns the rotation thresholds for root from config.json's
+// "audit" section, falling back to the built-in defaults when unset or
+// unreadable. Rotation is disabled only by an explicit negative max_bytes.
+func auditSettingsFor(root string) config.AuditSettings {
+	fallback := config.DefaultAuditSettings()
+	if root == "" {
+		return fallback
+	}
+	info, err := os.Stat(config.Path(root))
+	if err != nil {
+		return fallback
+	}
+	if cached, ok := auditSettingsCache.Load(root); ok {
+		memo, _ := cached.(auditSettingsMemo)
+		if memo.size == info.Size() && memo.modTime.Equal(info.ModTime()) {
+			return memo.settings
+		}
+	}
+	settings, err := config.ReadAudit(root)
+	if err != nil {
+		return fallback
+	}
+	auditSettingsCache.Store(root, auditSettingsMemo{settings: settings, modTime: info.ModTime(), size: info.Size()})
+	return settings
+}
 
 // AuditInfo tags audit rows with who performed the operation (roadmap §4.6.1).
 type AuditInfo struct {
@@ -80,6 +112,9 @@ type AuditVerifyResult struct {
 	Entries  int    `json:"entries"`
 	BrokenAt int    `json:"brokenAt,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+	// Anchor is the retained chain head of already-pruned segments (empty when
+	// the chain is verified from genesis).
+	Anchor string `json:"anchor,omitempty"`
 }
 
 // recordAuditWarn writes the audit row and warns on stderr when it fails, so a
@@ -96,7 +131,11 @@ func (e *Engine) VerifyAuditLog() (AuditVerifyResult, error) {
 	if e == nil || e.Config == nil || e.Config.RootDir == "" {
 		return AuditVerifyResult{}, fmt.Errorf("engine not configured")
 	}
-	prev := ""
+	anchor, err := readAuditAnchor(filepath.Join(e.Config.RootDir, "logs"))
+	if err != nil {
+		return AuditVerifyResult{}, err
+	}
+	prev := anchor
 	entries := 0
 	for _, path := range auditSegmentFiles(e.Config.RootDir) {
 		data, err := os.ReadFile(path)
@@ -131,7 +170,7 @@ func (e *Engine) VerifyAuditLog() (AuditVerifyResult, error) {
 			prev = claimed
 		}
 	}
-	return AuditVerifyResult{OK: true, Entries: entries}, nil
+	return AuditVerifyResult{OK: true, Entries: entries, Anchor: anchor}, nil
 }
 
 // auditSegmentFiles returns rotated segments plus the active file, in write
@@ -156,19 +195,71 @@ func auditSegmentFiles(root string) []string {
 	return append(segments, auditLogPath(root))
 }
 
-// rotateAuditLog renames the active log to a timestamped segment and prunes
-// the oldest segments beyond auditSegmentKeep.
-func rotateAuditLog(path string) error {
+// auditAnchorPath is the sidecar that keeps the chain head of the oldest
+// segments already pruned, so `glue audit verify` still has a trusted starting
+// hash after rotation dropped them.
+func auditAnchorPath(dir string) string { return filepath.Join(dir, "audit.anchor") }
+
+// auditAnchor is the persisted chain anchor: the last hash of the newest pruned
+// segment.
+type auditAnchor struct {
+	Pruned string `json:"pruned"`
+	Hash   string `json:"hash"`
+}
+
+// readAuditAnchor returns the retained chain head ("" when no anchor exists).
+func readAuditAnchor(dir string) (string, error) {
+	data, err := os.ReadFile(auditAnchorPath(dir))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var anchor auditAnchor
+	if err := json.Unmarshal(data, &anchor); err != nil {
+		return "", fmt.Errorf("parse audit anchor: %w", err)
+	}
+	return anchor.Hash, nil
+}
+
+// writeAuditAnchor records the last hash of a pruned segment (atomic rewrite).
+func writeAuditAnchor(dir, segment, hash string) error {
+	if hash == "" {
+		return nil
+	}
+	data, err := json.Marshal(auditAnchor{Pruned: segment, Hash: hash})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp := auditAnchorPath(dir) + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, auditAnchorPath(dir))
+}
+
+// rotateAuditLog renames the active log to a timestamped segment and prunes the
+// oldest segments beyond keepSegments (negative keeps every segment).
+func rotateAuditLog(path string, keepSegments int) error {
 	segment := filepath.Join(filepath.Dir(path),
 		"audit-"+time.Now().UTC().Format("20060102T150405.000000000Z")+".jsonl")
 	if err := os.Rename(path, segment); err != nil {
 		return err
 	}
-	pruneAuditSegments(filepath.Dir(path))
+	pruneAuditSegments(filepath.Dir(path), keepSegments)
 	return nil
 }
 
-func pruneAuditSegments(dir string) {
+// pruneAuditSegments deletes the oldest rotated segments beyond keepSegments
+// after anchoring their chain head. keepSegments < 0 disables pruning.
+func pruneAuditSegments(dir string, keepSegments int) {
+	if keepSegments < 0 {
+		return
+	}
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -181,8 +272,14 @@ func pruneAuditSegments(dir string) {
 		}
 	}
 	sort.Strings(segments)
-	for len(segments) > auditSegmentKeep {
-		_ = os.Remove(filepath.Join(dir, segments[0]))
+	for len(segments) > keepSegments {
+		oldest := segments[0]
+		// Anchor the chain head before dropping the segment so verification can
+		// still walk the surviving entries (and detect manual deletions).
+		if hash, err := lastAuditHash(filepath.Join(dir, oldest)); err == nil {
+			_ = writeAuditAnchor(dir, oldest, hash)
+		}
+		_ = os.Remove(filepath.Join(dir, oldest))
 		segments = segments[1:]
 	}
 }
@@ -349,8 +446,9 @@ func (e *Engine) appendAuditJSONL(info AuditInfo, operation, pkgName, version, s
 		return err
 	}
 	// Rotate before appending; prev carries the chain across segments.
-	if info, statErr := os.Stat(path); statErr == nil && auditLogMaxBytes > 0 && info.Size() >= auditLogMaxBytes {
-		if err := rotateAuditLog(path); err != nil {
+	settings := auditSettingsFor(e.Config.RootDir)
+	if info, statErr := os.Stat(path); statErr == nil && settings.RotationEnabled() && info.Size() >= settings.MaxBytes {
+		if err := rotateAuditLog(path, settings.KeepSegments); err != nil {
 			return err
 		}
 	}

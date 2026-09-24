@@ -72,14 +72,21 @@ glue config set agent.policy.protected git,nodejs
 - SQLite `activity_log` rows carry `source` (`cli`/`mcp`) and `actor`
   (MCP clientInfo such as `cline/3.7`).
 - `<data root>/logs/audit.jsonl` is append-only and hash-chained
-  (`prev`/`hash` per entry). It rotates at 8 MiB into
-  `audit-<UTC timestamp>.jsonl` and keeps the last 5 segments; the chain
-  continues across rotation.
+  (`prev`/`hash` per entry). It rotates into `audit-<UTC timestamp>.jsonl`,
+  keeping the last 5 segments; the chain continues across rotation.
+- Rotation is configurable: `glue config set audit.max_bytes 8388608` and
+  `glue config set audit.keep_segments 5` (defaults). `audit.max_bytes off`
+  disables rotation; `audit.keep_segments all` keeps every segment (`--`
+  precedes a literal negative value on the CLI).
+- Pruned segments leave `<data root>/logs/audit.anchor` (the retained chain
+  head), so verification can still walk what is left and still flags a segment
+  that was deleted by hand.
 - `glue audit list --source mcp --package git --since 2026-09-25T00:00:00Z --limit 50`
 - `glue audit list --jsonl ...` reads the JSONL files (rotated included)
   instead of SQLite.
 - `glue audit verify` recomputes the chain across all segments and fails when an
-  entry was edited.
+  entry was edited; on success it prints the anchor when older segments had
+  been pruned.
 
 Audit writes are best-effort for the operation itself: failures are surfaced as
 stderr warnings rather than aborting the install/uninstall.
