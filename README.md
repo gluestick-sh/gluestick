@@ -43,7 +43,10 @@ glue bucket add extras
 glue search python
 glue install git
 glue list --json
-glue doctor
+glue doctor            # agent-ready verdict for this machine (exit code 0/1)
+glue doctor --fix      # list-and-apply safe fixes (PATH, buckets, UTF-8, PowerShell, git, profiles), then re-check
+glue env               # traditional environment checks (git, 7z, shims, GitHub)
+glue mcp               # MCP server over stdio (for Cline/Claude Code and other MCP clients)
 ```
 
 Data directory: `%USERPROFILE%\.glue`

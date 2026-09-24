@@ -6,7 +6,7 @@
 *.out
 /dist/
 /build/
-/docs/
+# docs/ is tracked (roadmap, MCP and JSON-schema docs)
 
 # Agent/IDE local state
 .claude/
