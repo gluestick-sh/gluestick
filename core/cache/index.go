@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,6 +135,8 @@ func (idx *Index) initSchema() error {
 			package_name TEXT NOT NULL,
 			version TEXT NOT NULL,
 			status TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'cli',
+			actor TEXT NOT NULL DEFAULT '',
 			timestamp TEXT NOT NULL,
 			details TEXT
 		);
@@ -143,7 +146,56 @@ func (idx *Index) initSchema() error {
 		CREATE INDEX IF NOT EXISTS idx_install_history_package ON install_history(package_name);
 		CREATE INDEX IF NOT EXISTS idx_activity_log_timestamp ON activity_log(timestamp);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return idx.ensureActivityLogAuditColumns()
+}
+
+// ensureActivityLogAuditColumns adds the Phase 2 audit columns to databases
+// created before them (CREATE TABLE IF NOT EXISTS does not alter a table).
+func (idx *Index) ensureActivityLogAuditColumns() error {
+	columns := []struct {
+		name string
+		decl string
+	}{
+		{"source", "TEXT NOT NULL DEFAULT 'cli'"},
+		{"actor", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		ok, err := idx.tableHasColumn("activity_log", column.name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		if _, err := idx.db.Exec(fmt.Sprintf("ALTER TABLE activity_log ADD COLUMN %s %s", column.name, column.decl)); err != nil {
+			return fmt.Errorf("add activity_log.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+// tableHasColumn reports whether table already has column (PRAGMA table_info).
+func (idx *Index) tableHasColumn(table, column string) (bool, error) {
+	rows, err := idx.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // migrateFromJSON imports the legacy cache-index.json format into SQLite.
@@ -946,9 +998,15 @@ func (idx *Index) RemoveInstalled(pkgName string) error {
 	return tx.Commit()
 }
 
-// RecordActivity appends one activity log row (install/uninstall/update, etc.).
+// RecordActivity appends one activity log row with the default CLI source.
 // Unlike install_history, activity_log has no FK to packages and is not cascade-deleted.
 func (idx *Index) RecordActivity(operation, pkgName, version, status string, details map[string]interface{}) error {
+	return idx.RecordActivityWithSource(operation, pkgName, version, status, "cli", "", details)
+}
+
+// RecordActivityWithSource appends one activity log row with the audit
+// source/actor attached (Phase 2 §4.6.1).
+func (idx *Index) RecordActivityWithSource(operation, pkgName, version, status, source, actor string, details map[string]interface{}) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
@@ -958,11 +1016,14 @@ func (idx *Index) RecordActivity(operation, pkgName, version, status string, det
 			detailsJSON = string(b)
 		}
 	}
+	if source == "" {
+		source = "cli"
+	}
 
 	_, err := idx.db.Exec(`
-		INSERT INTO activity_log (operation, package_name, version, status, timestamp, details)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, operation, pkgName, version, status, time.Now().Format(time.RFC3339), detailsJSON)
+		INSERT INTO activity_log (operation, package_name, version, status, source, actor, timestamp, details)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, operation, pkgName, version, status, source, actor, time.Now().Format(time.RFC3339), detailsJSON)
 	return err
 }
 
@@ -1130,6 +1191,72 @@ func (idx *Index) QueryActivityLog(since string, limit, offset int) ([]map[strin
 		history = append(history, record)
 	}
 	return history, rows.Err()
+}
+
+// QueryAuditLog returns activity_log rows filtered by source/package/since,
+// newest first (Phase 2 §4.6.1: glue audit list).
+func (idx *Index) QueryAuditLog(source, pkgName, since string, limit int) ([]map[string]any, error) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	query := `SELECT operation, package_name, version, status, source, actor, timestamp, details FROM activity_log`
+	conditions := []string{}
+	args := []interface{}{}
+	if source != "" {
+		conditions = append(conditions, "source = ?")
+		args = append(args, source)
+	}
+	if pkgName != "" {
+		conditions = append(conditions, "package_name = ?")
+		args = append(args, pkgName)
+	}
+	if since != "" {
+		conditions = append(conditions, "timestamp >= ?")
+		args = append(args, since)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY timestamp DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := idx.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := []map[string]any{}
+	for rows.Next() {
+		var operation, pkg, version, status, source, actor, timestamp, details string
+		if err := rows.Scan(&operation, &pkg, &version, &status, &source, &actor, &timestamp, &details); err != nil {
+			continue
+		}
+		record := map[string]any{
+			"operation":    operation,
+			"package_name": pkg,
+			"version":      version,
+			"status":       status,
+			"source":       source,
+			"actor":        actor,
+			"timestamp":    timestamp,
+		}
+		if details != "" {
+			var detailsMap map[string]any
+			if err := json.Unmarshal([]byte(details), &detailsMap); err == nil {
+				record["details"] = detailsMap
+			} else {
+				record["details"] = map[string]any{}
+			}
+		} else {
+			record["details"] = map[string]any{}
+		}
+		entries = append(entries, record)
+	}
+	return entries, rows.Err()
 }
 
 // ClearActivityLog removes all rows from the activity log table.

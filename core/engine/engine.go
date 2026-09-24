@@ -37,7 +37,7 @@ func (e *Engine) Install(ctx context.Context, req *InstallRequest, reporter Prog
 	runtime.ReportProgress(reporter, PhaseResolve, req.Name, StatusRunning, 0, message.ProgressInstallStarting, nil, 0, 0)
 
 	if err := catalog.ValidateInstallTarget(e.Engine, ctx, req); err != nil {
-		_ = e.Cache.RecordActivity("install", pkgName, "", "failed", map[string]interface{}{
+		e.recordAuditWarn(ctx, "install", pkgName, "", "failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		reportInstallFailure(reporter, req.Name, err)
@@ -45,7 +45,7 @@ func (e *Engine) Install(ctx context.Context, req *InstallRequest, reporter Prog
 	}
 
 	if err := e.installDependsFirst(ctx, req, reporter); err != nil {
-		_ = e.Cache.RecordActivity("install", pkgName, "", "failed", map[string]interface{}{
+		e.recordAuditWarn(ctx, "install", pkgName, "", "failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		reportInstallFailure(reporter, req.Name, err)
@@ -53,7 +53,7 @@ func (e *Engine) Install(ctx context.Context, req *InstallRequest, reporter Prog
 	}
 
 	if err := install.PackageFull(e.Engine, ctx, req.Name, req, reporter); err != nil {
-		_ = e.Cache.RecordActivity("install", pkgName, "", "failed", map[string]interface{}{
+		e.recordAuditWarn(ctx, "install", pkgName, "", "failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		reportInstallFailure(reporter, req.Name, err)
@@ -61,7 +61,7 @@ func (e *Engine) Install(ctx context.Context, req *InstallRequest, reporter Prog
 	}
 
 	if err := e.installDependsPost(ctx, req, reporter); err != nil {
-		_ = e.Cache.RecordActivity("install", pkgName, "", "failed", map[string]interface{}{
+		e.recordAuditWarn(ctx, "install", pkgName, "", "failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		reportInstallFailure(reporter, req.Name, err)
@@ -77,12 +77,12 @@ func (e *Engine) Install(ctx context.Context, req *InstallRequest, reporter Prog
 	e.RecordSuccessfulInstall()
 
 	if prevVersion != "" && prevVersion != version {
-		_ = e.Cache.RecordActivity("upgrade", pkgName, version, "success", map[string]interface{}{
+		e.recordAuditWarn(ctx, "upgrade", pkgName, version, "success", map[string]interface{}{
 			"from": prevVersion,
 			"to":   version,
 		})
 	} else {
-		_ = e.Cache.RecordActivity("install", pkgName, version, "success", nil)
+		e.recordAuditWarn(ctx, "install", pkgName, version, "success", nil)
 	}
 
 	var suggestions []PackageSuggestion
@@ -112,7 +112,7 @@ func (e *Engine) Uninstall(ctx context.Context, req *UninstallRequest, reporter 
 
 	uninstalledVer, err := uninstall.PackageFull(e.Engine, ctx, req.Name, req)
 	if err != nil {
-		_ = e.Cache.RecordActivity("uninstall", pkgName, targetVer, "failed", map[string]interface{}{
+		e.recordAuditWarn(ctx, "uninstall", pkgName, targetVer, "failed", map[string]interface{}{
 			"error": err.Error(),
 		})
 		return createErrorResult(e, &req.Request, req.Name, err, "Uninstall failed", start)
@@ -120,7 +120,7 @@ func (e *Engine) Uninstall(ctx context.Context, req *UninstallRequest, reporter 
 
 	runtime.ReportProgress(reporter, PhaseComplete, req.Name, StatusSuccess, 100, message.ProgressUninstallComplete, nil, 0, 0)
 	e.RecordSuccessfulOp()
-	_ = e.Cache.RecordActivity("uninstall", pkgName, uninstalledVer, "success", nil)
+	e.recordAuditWarn(ctx, "uninstall", pkgName, uninstalledVer, "success", nil)
 
 	return &Result{
 		Name:     pkgName,

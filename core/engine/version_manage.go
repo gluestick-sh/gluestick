@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -81,7 +82,7 @@ func (e *Engine) SetPackageVersionLock(pkgName string, locked bool) error {
 	if inst.Version != "" {
 		label = fmt.Sprintf("%s@%s", pkgName, inst.Version)
 	}
-	_ = e.Cache.RecordActivity(op, label, inst.Version, "success", map[string]interface{}{
+	e.recordAuditWarn(context.Background(), op, label, inst.Version, "success", map[string]interface{}{
 		"locked": locked,
 	})
 	return nil
@@ -148,10 +149,10 @@ func (e *Engine) SwitchPackageVersion(pkgName, version string) error {
 	}
 	if err != nil {
 		details["error"] = err.Error()
-		_ = e.Cache.RecordActivity("version_switch", pkgName, version, "failed", details)
+		e.recordAuditWarn(context.Background(), "version_switch", pkgName, version, "failed", details)
 		return err
 	}
-	_ = e.Cache.RecordActivity("version_switch", pkgName, version, "success", details)
+	e.recordAuditWarn(context.Background(), "version_switch", pkgName, version, "success", details)
 	return nil
 }
 

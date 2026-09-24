@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -61,7 +62,7 @@ func (e *Engine) RecordDoctorActivity(report DoctorReport) error {
 	if len(failed) > 0 {
 		details["failedChecks"] = failed
 	}
-	return e.Cache.RecordActivity("doctor", "", "", status, details)
+	return e.RecordAudit(context.Background(), "doctor", "", "", status, details)
 }
 
 // RecordCheckUpdatesActivity logs a manual update-check result to the activity log.
@@ -70,7 +71,7 @@ func (e *Engine) RecordCheckUpdatesActivity(updatesCount int, summary string) er
 		"updatesCount": updatesCount,
 		"summary":      summary,
 	}
-	return e.Cache.RecordActivity("check_updates", "", "", "success", details)
+	return e.RecordAudit(context.Background(), "check_updates", "", "", "success", details)
 }
 
 // RecordBucketUpdateActivity logs a bucket git pull update to the activity log.
@@ -103,7 +104,7 @@ func (e *Engine) RecordBucketCheckActivity(withUpdates int, names []string, stat
 	} else if len(names) > 1 {
 		label = fmt.Sprintf("%s (+%d)", names[0], len(names)-1)
 	}
-	return e.Cache.RecordActivity("bucket_check", label, "", status, details)
+	return e.RecordAudit(context.Background(), "bucket_check", label, "", status, details)
 }
 
 // recordBucketActivity is a helper that records a bucket-related operation to the
@@ -113,7 +114,7 @@ func (e *Engine) recordBucketActivity(operation, label, status, errMsg string) e
 	if errMsg != "" {
 		details["error"] = errMsg
 	}
-	return e.Cache.RecordActivity(operation, label, "", status, details)
+	return e.RecordAudit(context.Background(), operation, label, "", status, details)
 }
 
 // bucketUpdateActivityLabel formats a bucket update task name for activity log display.
