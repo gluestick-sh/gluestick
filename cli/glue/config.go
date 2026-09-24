@@ -28,9 +28,13 @@ var configGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		agent, err := config.ReadAgent(root)
+		if err != nil {
+			return err
+		}
 
 		key := args[0]
-		value, set, err := configResolvedValue(cfg, key)
+		value, set, err := configResolvedValue(cfg, agent, key)
 		if err != nil {
 			return emitConfigError("config_get", key, err)
 		}
@@ -63,6 +67,25 @@ var configSetCmd = &cobra.Command{
 		key := args[0]
 		value := args[1]
 
+		if isAgentConfigKey(key) {
+			agent, err := config.ReadAgent(root)
+			if err != nil {
+				return emitConfigError("config_set", key, err)
+			}
+			stored, err := setAgentConfigValue(&agent, key, value)
+			if err != nil {
+				return emitConfigError("config_set", key, err)
+			}
+			if err := config.WriteAgent(root, agent); err != nil {
+				return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
+			}
+			if jsonOutputEnabled() {
+				return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
+			}
+			fmt.Printf("Set %s = %v\n", key, stored)
+			return nil
+		}
+
 		var stored any
 		switch key {
 		case "github_proxy":
@@ -91,7 +114,7 @@ var configSetCmd = &cobra.Command{
 			cfg.Color = &enabled
 		default:
 			return emitConfigError("config_set", key, fmt.Errorf(
-				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose", key))
+				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected", key))
 		}
 
 		if err := saveConfig(root, cfg); err != nil {
@@ -120,6 +143,33 @@ var configUnsetCmd = &cobra.Command{
 		}
 
 		key := args[0]
+
+		if isAgentConfigKey(key) {
+			agent, err := config.ReadAgent(root)
+			if err != nil {
+				return emitConfigError("config_unset", key, err)
+			}
+			_, wasSet, err := resolveAgentConfigValue(agent, key)
+			if err != nil {
+				return emitConfigError("config_unset", key, err)
+			}
+			if !wasSet {
+				if jsonOutputEnabled() {
+					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+				}
+				fmt.Printf("%s is not set\n", key)
+				return nil
+			}
+			resetAgentConfigValue(&agent, key)
+			if err := config.WriteAgent(root, agent); err != nil {
+				return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
+			}
+			if jsonOutputEnabled() {
+				return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": true})
+			}
+			fmt.Printf("Unset %s\n", key)
+			return nil
+		}
 
 		var wasSet bool
 		switch key {
@@ -190,24 +240,31 @@ var configListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		agent, err := config.ReadAgent(root)
+		if err != nil {
+			return err
+		}
 
 		if jsonOutputEnabled() {
 			parallel, parallelSet := configTriBool(cfg.ParallelDownload, true)
 			colorValue, colorSet := configTriBool(cfg.Color, true)
 			verboseValue, verboseSet := configTriBool(cfg.Verbose, false)
 			return emitJSON(map[string]any{
-				"command":               "config_list",
-				"github_proxy":          cfg.GitHubProxy,
-				"github_proxy_set":      cfg.GitHubProxy != "",
-				"parallel_download":     parallel,
-				"parallel_download_set": parallelSet,
-				"color":                 colorValue,
-				"color_set":             colorSet,
-				"verbose":               verboseValue,
-				"verbose_set":           verboseSet,
+				"command":                "config_list",
+				"github_proxy":           cfg.GitHubProxy,
+				"github_proxy_set":       cfg.GitHubProxy != "",
+				"parallel_download":      parallel,
+				"parallel_download_set":  parallelSet,
+				"color":                  colorValue,
+				"color_set":              colorSet,
+				"verbose":                verboseValue,
+				"verbose_set":            verboseSet,
+				"agent_auto_yes":         agent.AutoYes,
+				"agent_policy_mode":      agent.Policy.Mode,
+				"agent_policy_deny":      agent.Policy.Deny,
+				"agent_policy_protected": agent.Policy.Protected,
 			})
 		}
-
 		fmt.Printf("%sConfiguration:%s\n", colorBlue, colorReset)
 		if cfg.GitHubProxy == "" {
 			fmt.Println("  github_proxy = (not set, direct GitHub)")
@@ -217,6 +274,10 @@ var configListCmd = &cobra.Command{
 		fmt.Printf("  parallel_download = %s\n", formatParallelDownload(cfg.ParallelDownload))
 		fmt.Printf("  color = %s\n", formatColor(cfg.Color))
 		fmt.Printf("  verbose = %s\n", formatVerbose(cfg.Verbose))
+		fmt.Printf("  agent.auto_yes = %v\n", agent.AutoYes)
+		fmt.Printf("  agent.policy.mode = %s\n", agent.Policy.Mode)
+		fmt.Printf("  agent.policy.deny = %s\n", strings.Join(agent.Policy.Deny, ","))
+		fmt.Printf("  agent.policy.protected = %s\n", strings.Join(agent.Policy.Protected, ","))
 
 		return nil
 	},
@@ -254,7 +315,10 @@ func emitConfigError(command, key string, err error) error {
 
 // configResolvedValue returns the resolved value and set flag for a config key.
 // Boolean keys resolve to real booleans (defaults applied); github_proxy is a string.
-func configResolvedValue(cfg *config.Basics, key string) (any, bool, error) {
+func configResolvedValue(cfg *config.Basics, agent config.AgentSettings, key string) (any, bool, error) {
+	if isAgentConfigKey(key) {
+		return resolveAgentConfigValue(agent, key)
+	}
 	switch key {
 	case "github_proxy":
 		return cfg.GitHubProxy, cfg.GitHubProxy != "", nil
@@ -278,6 +342,82 @@ func configTriBool(v *bool, def bool) (value, set bool) {
 		return def, false
 	}
 	return *v, true
+}
+
+// agentConfigKeys are the config.json agent keys exposed by `glue config`.
+var agentConfigKeys = map[string]bool{
+	"agent.auto_yes":         true,
+	"agent.policy.mode":      true,
+	"agent.policy.deny":      true,
+	"agent.policy.protected": true,
+}
+
+func isAgentConfigKey(key string) bool { return agentConfigKeys[key] }
+
+// resolveAgentConfigValue returns the value and set flag for an agent key.
+func resolveAgentConfigValue(settings config.AgentSettings, key string) (any, bool, error) {
+	switch key {
+	case "agent.auto_yes":
+		return settings.AutoYes, settings.AutoYes, nil
+	case "agent.policy.mode":
+		return settings.Policy.Mode, true, nil
+	case "agent.policy.deny":
+		return strings.Join(settings.Policy.Deny, ","), len(settings.Policy.Deny) > 0, nil
+	case "agent.policy.protected":
+		return strings.Join(settings.Policy.Protected, ","), len(settings.Policy.Protected) > 0, nil
+	}
+	return nil, false, fmt.Errorf("unknown config key: %s", key)
+}
+
+// setAgentConfigValue mutates one agent key from its CLI string form.
+func setAgentConfigValue(settings *config.AgentSettings, key, value string) (any, error) {
+	switch key {
+	case "agent.auto_yes":
+		enabled, err := parseConfigBool(value)
+		if err != nil {
+			return nil, err
+		}
+		settings.AutoYes = enabled
+		return enabled, nil
+	case "agent.policy.mode":
+		mode := strings.ToLower(strings.TrimSpace(value))
+		if mode != config.AgentPolicyModeStrict && mode != config.AgentPolicyModeConfirm && mode != config.AgentPolicyModeAuto {
+			return nil, fmt.Errorf("agent.policy.mode must be strict, confirm or auto")
+		}
+		settings.Policy.Mode = mode
+		return mode, nil
+	case "agent.policy.deny":
+		settings.Policy.Deny = splitConfigList(value)
+		return settings.Policy.Deny, nil
+	case "agent.policy.protected":
+		settings.Policy.Protected = splitConfigList(value)
+		return settings.Policy.Protected, nil
+	}
+	return nil, fmt.Errorf("unknown config key: %s", key)
+}
+
+// resetAgentConfigValue restores one agent key to its safe default.
+func resetAgentConfigValue(settings *config.AgentSettings, key string) {
+	switch key {
+	case "agent.auto_yes":
+		settings.AutoYes = false
+	case "agent.policy.mode":
+		settings.Policy.Mode = config.AgentPolicyModeConfirm
+	case "agent.policy.deny":
+		settings.Policy.Deny = []string{}
+	case "agent.policy.protected":
+		settings.Policy.Protected = []string{}
+	}
+}
+
+func splitConfigList(value string) []string {
+	out := []string{}
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // formatConfigValue renders a resolved config value for text mode.

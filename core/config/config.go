@@ -24,6 +24,7 @@ type configFile struct {
 	Verbose                    *bool                               `json:"verbose,omitempty"`
 	ParallelDownload           *bool                               `json:"parallel_download,omitempty"`
 	Color                      *bool                               `json:"color,omitempty"`
+	Agent                      *AgentSettings                      `json:"agent,omitempty"`
 }
 
 // Basics holds config.json keys managed by the glue config CLI.
@@ -34,6 +35,81 @@ type Basics struct {
 	Color            *bool
 }
 
+// AgentSettings is the "agent" section of config.json: the MCP/agent safety
+// switches (roadmap §4.6.2).
+type AgentSettings struct {
+	AutoYes bool        `json:"auto_yes,omitempty"`
+	Policy  AgentPolicy `json:"policy,omitempty"`
+}
+
+// AgentPolicy gates MCP write operations.
+type AgentPolicy struct {
+	Mode      string   `json:"mode,omitempty"`      // strict | confirm | auto
+	Deny      []string `json:"deny,omitempty"`      // operation names blocked outright
+	Protected []string `json:"protected,omitempty"` // package names agents may not uninstall
+}
+
+// Supported agent policy modes. strict and confirm both require a confirm
+// token for write operations; auto skips confirmation but never the deny list.
+const (
+	AgentPolicyModeStrict  = "strict"
+	AgentPolicyModeConfirm = "confirm"
+	AgentPolicyModeAuto    = "auto"
+)
+
+// DefaultAgentSettings is the safe default: confirm every write, no overrides.
+func DefaultAgentSettings() AgentSettings {
+	return AgentSettings{
+		Policy: AgentPolicy{
+			Mode:      AgentPolicyModeConfirm,
+			Deny:      []string{},
+			Protected: []string{},
+		},
+	}
+}
+
+// NormalizeAgentSettings clamps the mode and copies slices so callers cannot
+// mutate the parsed config.
+func NormalizeAgentSettings(s AgentSettings) AgentSettings {
+	out := AgentSettings{AutoYes: s.AutoYes}
+	switch strings.ToLower(strings.TrimSpace(s.Policy.Mode)) {
+	case AgentPolicyModeStrict:
+		out.Policy.Mode = AgentPolicyModeStrict
+	case AgentPolicyModeAuto:
+		out.Policy.Mode = AgentPolicyModeAuto
+	default:
+		out.Policy.Mode = AgentPolicyModeConfirm
+	}
+	out.Policy.Deny = append([]string{}, s.Policy.Deny...)
+	out.Policy.Protected = append([]string{}, s.Policy.Protected...)
+	return out
+}
+
+// ReadAgent returns the normalized agent settings from config.json. A missing
+// file or missing "agent" section yields DefaultAgentSettings.
+func ReadAgent(rootDir string) (AgentSettings, error) {
+	cfg, err := readConfigFile(rootDir)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	if cfg.Agent == nil {
+		return DefaultAgentSettings(), nil
+	}
+	return NormalizeAgentSettings(*cfg.Agent), nil
+}
+
+// WriteAgent updates the agent section while preserving every other config
+// key (roadmap §4.6.2: glue config set agent.*).
+func WriteAgent(rootDir string, settings AgentSettings) error {
+	cfg, err := readConfigFile(rootDir)
+	if err != nil {
+		return err
+	}
+	normalized := NormalizeAgentSettings(settings)
+	cfg.Agent = &normalized
+	return writeConfigFile(rootDir, cfg)
+}
+
 // DefaultBucketCheckIntervalMinutes is the background bucket update-check interval.
 const DefaultBucketCheckIntervalMinutes = 15
 
@@ -41,9 +117,9 @@ const DefaultBucketCheckIntervalMinutes = 15
 var AllowedBucketCheckIntervals = []int{5, 15, 30}
 
 const (
-	BucketSyncModeManual    = "manual"
-	BucketSyncModeAuto      = "auto"
-	DefaultBucketSyncMode   = BucketSyncModeManual
+	BucketSyncModeManual  = "manual"
+	BucketSyncModeAuto    = "auto"
+	DefaultBucketSyncMode = BucketSyncModeManual
 )
 
 // NormalizeBucketSyncMode clamps to a supported bucket sync mode.
