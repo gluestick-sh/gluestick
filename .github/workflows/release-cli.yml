@@ -1,12 +1,16 @@
-# Tag push: test → build → GitHub Release → https://gluestick.sh/releases/shim/
+# Tag push: test → build → installer → GitHub Release → https://gluestick.sh/releases/gluestick/cli/
 # Manual: workflow_dispatch with an existing tag to re-sync that release to the site.
 #
 # Secrets (org recommended): GLUESTICK_SSH_HOST, GLUESTICK_SSH_PORT,
 #   GLUESTICK_SSH_USER, GLUESTICK_SSH_KEY, GLUESTICK_SSH_PATH,
 #   optional GLUESTICK_SSH_PASSPHRASE / GLUESTICK_SSH_KNOWN_HOSTS
-# Upload target: $GLUESTICK_SSH_PATH/shim/ → https://gluestick.sh/releases/shim/
+# Upload target: $GLUESTICK_SSH_PATH/gluestick/cli/ → https://gluestick.sh/releases/gluestick/cli/
+#
+# NOTE: monorepo release pipeline — deploys to the NEW release space
+# /releases/gluestick/cli/, never to the legacy /releases/cli/ used by the
+# former standalone repos.
 
-name: Release
+name: Release (cli)
 
 on:
   push:
@@ -35,15 +39,18 @@ jobs:
           go-version: "1.26.x"
           cache: false
 
+      - name: Test
+        run: go test ./cli/glue/... -count=1 -timeout 5m
+
       - name: Build and smoke (amd64)
         shell: pwsh
         run: |
-          go build -o shim.exe .
-          if (-not (Test-Path shim.exe)) { throw "shim.exe not found" }
+          go build -o glue.exe ./cli/glue
+          .\glue.exe --help
 
   build:
     if: github.event_name == 'push'
-    name: build shim-${{ matrix.goarch }}.exe
+    name: build glue-${{ matrix.goarch }}.exe
     runs-on: ubuntu-latest
     needs: test
     strategy:
@@ -57,33 +64,92 @@ jobs:
           go-version: "1.26.x"
           cache: false
 
-      - name: Build shim.exe
+      - name: Build glue.exe
         env:
           GOOS: windows
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          out="shim-windows-${{ matrix.goarch }}.exe"
-          go build -trimpath -ldflags "-s -w" -o "$out" .
+          version="${GITHUB_REF_NAME#v}"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          out="glue-windows-${{ matrix.goarch }}.exe"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/gluestick-sh/cli/version.Version=${version} -X github.com/gluestick-sh/cli/version.Commit=${GITHUB_SHA} -X github.com/gluestick-sh/cli/version.Date=${date}" \
+            -o "$out" ./cli/glue
           sha256sum "$out" | awk '{print $1}' > "$out.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: shim-windows-${{ matrix.goarch }}
+          name: glue-windows-${{ matrix.goarch }}
           path: |
-            shim-windows-${{ matrix.goarch }}.exe
-            shim-windows-${{ matrix.goarch }}.exe.sha256
+            glue-windows-${{ matrix.goarch }}.exe
+            glue-windows-${{ matrix.goarch }}.exe.sha256
+
+  build-installer:
+    if: github.event_name == 'push'
+    name: build GlueSetup-${{ matrix.goarch }}.exe
+    runs-on: windows-latest
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: glue-windows-${{ matrix.goarch }}
+          path: dist
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Verify glue artifact
+        shell: pwsh
+        run: |
+          $glue = "dist\glue-windows-${{ matrix.goarch }}.exe"
+          if (-not (Test-Path -LiteralPath $glue)) {
+            throw "missing glue artifact: $glue"
+          }
+
+      - name: Build NSIS installer
+        shell: pwsh
+        working-directory: cli/installer
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          $version = $env:VERSION -replace '^v', ''
+          $glue = "..\..\dist\glue-windows-${{ matrix.goarch }}.exe"
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              .\build-installer.ps1 -Arch "${{ matrix.goarch }}" -Version $version -SkipBuildGlue -GlueExe $glue
+              break
+            } catch {
+              if ($attempt -eq $maxAttempts) { throw }
+              Write-Warning "Installer build failed (attempt $attempt/$maxAttempts): $_"
+              Start-Sleep -Seconds 15
+            }
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: glue-setup-windows-${{ matrix.goarch }}
+          path: |
+            cli/installer/output/GlueSetup-${{ matrix.goarch }}.exe
+            cli/installer/output/GlueSetup-${{ matrix.goarch }}.exe.sha256
 
   release:
     if: github.event_name == 'push'
     name: publish GitHub Release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, build-installer]
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
-          pattern: shim-windows-*
+          pattern: glue-*
           merge-multiple: true
 
       - name: Create GitHub Release
@@ -94,12 +160,16 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: shim-release
+          name: cli-release
           path: |
-            dist/shim-windows-amd64.exe
-            dist/shim-windows-arm64.exe
-            dist/shim-windows-amd64.exe.sha256
-            dist/shim-windows-arm64.exe.sha256
+            dist/GlueSetup-amd64.exe
+            dist/GlueSetup-arm64.exe
+            dist/GlueSetup-amd64.exe.sha256
+            dist/GlueSetup-arm64.exe.sha256
+            dist/glue-windows-amd64.exe
+            dist/glue-windows-arm64.exe
+            dist/glue-windows-amd64.exe.sha256
+            dist/glue-windows-arm64.exe.sha256
           if-no-files-found: error
 
   sync-web:
@@ -115,20 +185,28 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           gh release download "$TAG" -R "${{ github.repository }}" -D dist \
-            -p 'shim-windows-amd64.exe' \
-            -p 'shim-windows-arm64.exe' \
-            -p 'shim-windows-amd64.exe.sha256' \
-            -p 'shim-windows-arm64.exe.sha256'
+            -p 'GlueSetup-amd64.exe' \
+            -p 'GlueSetup-arm64.exe' \
+            -p 'GlueSetup-amd64.exe.sha256' \
+            -p 'GlueSetup-arm64.exe.sha256' \
+            -p 'glue-windows-amd64.exe' \
+            -p 'glue-windows-arm64.exe' \
+            -p 'glue-windows-amd64.exe.sha256' \
+            -p 'glue-windows-arm64.exe.sha256'
           ls -la dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: shim-release
+          name: cli-release
           path: |
-            dist/shim-windows-amd64.exe
-            dist/shim-windows-arm64.exe
-            dist/shim-windows-amd64.exe.sha256
-            dist/shim-windows-arm64.exe.sha256
+            dist/GlueSetup-amd64.exe
+            dist/GlueSetup-arm64.exe
+            dist/GlueSetup-amd64.exe.sha256
+            dist/GlueSetup-arm64.exe.sha256
+            dist/glue-windows-amd64.exe
+            dist/glue-windows-arm64.exe
+            dist/glue-windows-amd64.exe.sha256
+            dist/glue-windows-arm64.exe.sha256
           if-no-files-found: error
 
   publish-web:
@@ -143,7 +221,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: shim-release
+          name: cli-release
           path: dist
 
       - name: Setup SSH
@@ -197,7 +275,7 @@ jobs:
             "${SSH_USER}@${SSH_HOST}" \
             "whoami"
 
-      - name: Deploy to gluestick.sh/releases/shim/
+      - name: Deploy to gluestick.sh/releases/gluestick/cli/
         env:
           SSH_HOST: ${{ secrets.GLUESTICK_SSH_HOST }}
           SSH_PORT: ${{ secrets.GLUESTICK_SSH_PORT }}
@@ -205,10 +283,10 @@ jobs:
           SSH_PATH: ${{ secrets.GLUESTICK_SSH_PATH }}
         run: |
           set -euo pipefail
-          remote_dir="${SSH_PATH%/}/shim"
+          remote_dir="${SSH_PATH%/}/gluestick/cli"
           ssh_opts=(-p "${SSH_PORT}" -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes)
 
-          ls -la dist/shim-windows-*
+          ls -la dist/
 
           ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p $(printf %q "$remote_dir")"
 
@@ -219,10 +297,14 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
-            dist/shim-windows-amd64.exe \
-            dist/shim-windows-arm64.exe \
-            dist/shim-windows-amd64.exe.sha256 \
-            dist/shim-windows-arm64.exe.sha256 \
+            dist/GlueSetup-amd64.exe \
+            dist/GlueSetup-arm64.exe \
+            dist/GlueSetup-amd64.exe.sha256 \
+            dist/GlueSetup-arm64.exe.sha256 \
+            dist/glue-windows-amd64.exe \
+            dist/glue-windows-arm64.exe \
+            dist/glue-windows-amd64.exe.sha256 \
+            dist/glue-windows-arm64.exe.sha256 \
             "${SSH_USER}@${SSH_HOST}:${remote_dir}/"
 
-          echo "public URL: https://gluestick.sh/releases/shim/"
+          echo "public URL: https://gluestick.sh/releases/gluestick/cli/"

@@ -1,4 +1,4 @@
-name: CI
+name: Build & Test
 
 on:
   push:
@@ -26,6 +26,9 @@ jobs:
       - name: Build all modules
         run: go build ./cli/... ./core/... ./shim/...
 
+      # glue.exe (not glue-alpha.exe) is intentional: CI runners are ephemeral
+      # (no real ~/.glue installation to protect) and this binary is never run.
+      # Locally, always build glue-alpha.exe instead (see AGENTS.md).
       - name: Build glue.exe and shim.exe
         run: |
           go build -o glue.exe ./cli/glue
