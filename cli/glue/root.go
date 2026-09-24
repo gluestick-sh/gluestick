@@ -59,16 +59,59 @@ func init() {
 	rootCmd.PersistentFlags().Bool("verbose", false, "print detailed progress (mirrors, retries, failed URLs)")
 }
 
-// glueRoot returns the glue data directory (~/.glue).
+// glueRoot returns the glue data directory.
+//
+// The directory is derived from the executable name so development builds stay
+// fully isolated from a real installation: glue.exe uses ~/.glue, while
+// glue-alpha.exe (any glue-<suffix>) automatically uses ~/.glue-<suffix>.
+// The hidden --root flag always wins.
 func glueRoot() string {
 	if root, _ := rootCmd.PersistentFlags().GetString("root"); root != "" {
 		return root
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), ".glue")
+		return filepath.Join(os.TempDir(), defaultDataDir())
 	}
-	return filepath.Join(home, ".glue")
+	return filepath.Join(home, defaultDataDir())
+}
+
+// defaultDataDir derives the data directory name from the running executable:
+// ".glue" for glue.exe, ".glue-<suffix>" for glue-<suffix>.exe (e.g. glue-alpha.exe),
+// and ".glue" for anything else (including test binaries like glue.test).
+func defaultDataDir() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ".glue"
+	}
+	if suffix, ok := executableDataDirSuffix(strings.TrimSuffix(filepath.Base(exePath), ".exe")); ok {
+		return ".glue-" + suffix
+	}
+	return ".glue"
+}
+
+// executableDataDirSuffix reports the isolation suffix of an executable base name:
+// "glue-alpha" → ("alpha", true); "glue" and anything else → ("", false).
+func executableDataDirSuffix(name string) (string, bool) {
+	if suffix, ok := strings.CutPrefix(name, "glue-"); ok && validDataDirSuffix(suffix) {
+		return suffix, true
+	}
+	return "", false
+}
+
+// validDataDirSuffix allows only letters, digits, and dashes in a data-dir suffix.
+func validDataDirSuffix(suffix string) bool {
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func initConfig() {

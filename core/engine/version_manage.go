@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/gluestick-sh/core/apperr"
 	"github.com/gluestick-sh/core/apps"
 	"github.com/gluestick-sh/core/engine/internal/install"
 )
@@ -67,7 +68,7 @@ func (e *Engine) IsPackageVersionLocked(pkgName string) bool {
 func (e *Engine) SetPackageVersionLock(pkgName string, locked bool) error {
 	inst, ok := e.Cache.GetInstalled(pkgName)
 	if !ok {
-		return fmt.Errorf("%s is not installed", pkgName)
+		return &apperr.PackageNotInstalled{Name: pkgName}
 	}
 	if err := e.Cache.SetVersionLocked(pkgName, locked); err != nil {
 		return err

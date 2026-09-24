@@ -43,3 +43,19 @@ func TestEmitJSON(t *testing.T) {
 		t.Fatalf("invalid json: %s", buf.String())
 	}
 }
+
+// setJSONTestFlags points the hidden --root flag at a temp data directory and
+// enables --json, restoring both when the test ends.
+func setJSONTestFlags(t *testing.T, root string) {
+	t.Helper()
+	if err := rootCmd.PersistentFlags().Set("root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := rootCmd.PersistentFlags().Set("json", "true"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = rootCmd.PersistentFlags().Set("root", "")
+		_ = rootCmd.PersistentFlags().Set("json", "false")
+	})
+}

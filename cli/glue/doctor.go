@@ -1,11 +1,11 @@
-﻿package main
+package main
 
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/message"
+	"github.com/spf13/cobra"
 )
 
 // doctorCmd runs environment checks (data dir, git, 7z, shims, GitHub, etc.).
@@ -17,6 +17,8 @@ var doctorCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(doctorCmd)
+	doctorCmd.SilenceUsage = true
+	doctorCmd.SilenceErrors = true
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) error {

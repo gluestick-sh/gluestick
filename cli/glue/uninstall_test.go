@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -51,5 +51,49 @@ func TestUninstall_orphanShimsOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(shimsMetaDir, pkgName+".json")); !os.IsNotExist(err) {
 		t.Fatalf("shim meta still exists: %v", err)
+	}
+}
+
+// TestUninstallJSON_errorCode verifies the structured error contract in JSON mode:
+// uninstalling a missing package exits 1 with a non-empty error and code.
+func TestUninstallJSON_errorCode(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+	uninstallCmd.SetContext(context.Background())
+
+	out := captureStdout(t, func() {
+		err := runUninstall(uninstallCmd, []string{"definitely-missing"})
+		if err == nil {
+			t.Fatal("expected failure for missing package")
+		}
+		if code := exitCode(err); code != 1 {
+			t.Fatalf("exitCode = %d, want 1", code)
+		}
+	})
+
+	var res struct {
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+		Results []struct {
+			Ref   string `json:"ref"`
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if res.Command != "uninstall" || res.OK {
+		t.Fatalf("command/ok = %q/%v, want uninstall/false\n%s", res.Command, res.OK, out)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(res.Results))
+	}
+	item := res.Results[0]
+	if item.Error == "" {
+		t.Fatalf("expected non-empty error: %+v\n%s", item, out)
+	}
+	if item.Code != "package_not_installed" {
+		t.Fatalf("code = %q, want package_not_installed\n%s", item.Code, out)
 	}
 }

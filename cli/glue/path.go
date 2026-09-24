@@ -1,4 +1,4 @@
-﻿//go:build windows
+//go:build windows
 
 package main
 
@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/gluestick-sh/core/shim"
+	"github.com/spf13/cobra"
 )
 
 var pathCmd = &cobra.Command{
@@ -26,6 +26,10 @@ var pathShowCmd = &cobra.Command{
 			return fmt.Errorf("initialize shim manager: %w", err)
 		}
 
+		if jsonOutputEnabled() {
+			return emitJSON(map[string]any{"bin_dir": shimMgr.BinDir()})
+		}
+
 		fmt.Println(shimMgr.BinDir())
 		return nil
 	},
@@ -42,7 +46,25 @@ var pathCheckCmd = &cobra.Command{
 			return fmt.Errorf("initialize shim manager: %w", err)
 		}
 
-		if !shimMgr.InPath() {
+		inPath := shimMgr.InPath()
+		shadowed := storeAliasShadowsShims(shimMgr.BinDir())
+
+		if jsonOutputEnabled() {
+			if err := emitJSON(map[string]any{
+				"in_path":               inPath,
+				"bin_dir":               shimMgr.BinDir(),
+				"store_alias_shadowing": shadowed,
+				"ok":                    inPath && !shadowed,
+			}); err != nil {
+				return err
+			}
+			if !inPath || shadowed {
+				return reportedFail()
+			}
+			return nil
+		}
+
+		if !inPath {
 			fmt.Println(markFail + " Glue is NOT in PATH")
 			fmt.Println("\nAdd the following to your PATH:")
 			fmt.Println(shimMgr.BinDir())
@@ -51,14 +73,23 @@ var pathCheckCmd = &cobra.Command{
 		}
 
 		fmt.Println(markSuccess + " Glue is in PATH")
-		apps := windowsAppsDir()
-		if apps != "" && pathDirPrecedes(os.Getenv("PATH"), apps, shimMgr.BinDir()) {
+		if shadowed {
 			fmt.Println(markFail + " Microsoft Store python aliases may shadow Glue shims")
 			fmt.Println("    → Run: glue path setup")
 			return reportedFail()
 		}
 		return nil
 	},
+}
+
+// storeAliasShadowsShims reports whether the Microsoft Store python aliases directory
+// precedes the glue shims dir on PATH (shims would be shadowed by Store aliases).
+func storeAliasShadowsShims(binDir string) bool {
+	apps := windowsAppsDir()
+	if apps == "" {
+		return false
+	}
+	return pathDirPrecedes(os.Getenv("PATH"), apps, binDir)
 }
 
 var pathSetupCmd = &cobra.Command{
@@ -78,13 +109,18 @@ var pathSetupCmd = &cobra.Command{
 
 // addToUserPath puts dir first on the user PATH so Store aliases cannot shadow shims.
 func addToUserPath(dir string) error {
-	fmt.Printf("Putting %s first on user PATH...\n", dir)
+	if !jsonOutputEnabled() {
+		fmt.Printf("Putting %s first on user PATH...\n", dir)
+	}
 	changed, err := ensureUserPathFront(dir)
 	if err != nil {
 		return err
 	}
 	prependDirToProcessPath(dir)
 	disableWindowsPythonAliases()
+	if jsonOutputEnabled() {
+		return emitJSON(map[string]any{"bin_dir": dir, "changed": changed, "ok": true})
+	}
 	if !changed {
 		fmt.Println(markSuccess + " glue shims already first on user PATH")
 		return nil
@@ -99,4 +135,8 @@ func init() {
 	pathCmd.AddCommand(pathShowCmd)
 	pathCmd.AddCommand(pathCheckCmd)
 	pathCmd.AddCommand(pathSetupCmd)
+	for _, c := range []*cobra.Command{pathShowCmd, pathCheckCmd, pathSetupCmd} {
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+	}
 }

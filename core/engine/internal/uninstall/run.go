@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gluestick-sh/core/apperr"
 	"github.com/gluestick-sh/core/apps"
 	"github.com/gluestick-sh/core/cache"
 	"github.com/gluestick-sh/core/engine/internal/install"
@@ -68,7 +69,7 @@ func PackageFull(e *runtime.Engine,
 			}
 			return version, nil
 		}
-		return "", fmt.Errorf("%s", runtime.FormatNotInstalled(pkgName))
+		return "", &apperr.PackageNotInstalled{Name: pkgName}
 	}
 
 	if targetVer == "" {

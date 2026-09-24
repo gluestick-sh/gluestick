@@ -1,13 +1,13 @@
-﻿package main
+package main
 
 import (
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/humanize"
+	"github.com/spf13/cobra"
 )
 
 // infoCmd shows metadata for installed packages (path, cache, shims, manifest fields).
@@ -20,6 +20,8 @@ var infoCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(infoCmd)
+	infoCmd.SilenceUsage = true
+	infoCmd.SilenceErrors = true
 }
 
 func runInfo(cmd *cobra.Command, args []string) error {

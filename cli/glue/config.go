@@ -1,15 +1,15 @@
-﻿package main
+package main
 
 import (
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/gluestick-sh/core/bucket"
-	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/config"
+	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/verbose"
+	"github.com/spf13/cobra"
 )
 
 var configCmd = &cobra.Command{
@@ -30,24 +30,19 @@ var configGetCmd = &cobra.Command{
 		}
 
 		key := args[0]
-		var value string
-		switch key {
-		case "github_proxy":
-			value = cfg.GitHubProxy
-		case "verbose":
-			value = formatVerbose(cfg.Verbose)
-		case "parallel_download":
-			value = formatParallelDownload(cfg.ParallelDownload)
-		case "color":
-			value = formatColor(cfg.Color)
-		default:
-			return fmt.Errorf("unknown config key: %s", key)
+		value, set, err := configResolvedValue(cfg, key)
+		if err != nil {
+			return emitConfigError("config_get", key, err)
+		}
+
+		if jsonOutputEnabled() {
+			return emitJSON(map[string]any{"command": "config_get", "key": key, "value": value, "set": set})
 		}
 
 		if key == "github_proxy" && value == "" {
 			fmt.Println("(not set)")
 		} else {
-			fmt.Println(value)
+			fmt.Println(formatConfigValue(key, value))
 		}
 		return nil
 	},
@@ -68,40 +63,46 @@ var configSetCmd = &cobra.Command{
 		key := args[0]
 		value := args[1]
 
+		var stored any
 		switch key {
 		case "github_proxy":
+			stored = value
 			cfg.GitHubProxy = value
-			fmt.Printf("Set github_proxy = %s\n", value)
 		case "verbose":
 			enabled, err := parseConfigBool(value)
 			if err != nil {
-				return err
+				return emitConfigError("config_set", key, err)
 			}
+			stored = enabled
 			cfg.Verbose = &enabled
-			fmt.Printf("Set verbose = %t\n", enabled)
 		case "parallel_download":
 			enabled, err := parseConfigBool(value)
 			if err != nil {
-				return err
+				return emitConfigError("config_set", key, err)
 			}
+			stored = enabled
 			cfg.ParallelDownload = &enabled
-			fmt.Printf("Set parallel_download = %t\n", enabled)
 		case "color":
 			enabled, err := parseConfigBool(value)
 			if err != nil {
-				return err
+				return emitConfigError("config_set", key, err)
 			}
+			stored = enabled
 			cfg.Color = &enabled
-			fmt.Printf("Set color = %t\n", enabled)
 		default:
-			return fmt.Errorf("unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose", key)
+			return emitConfigError("config_set", key, fmt.Errorf(
+				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose", key))
 		}
 
 		if err := saveConfig(root, cfg); err != nil {
-			return fmt.Errorf("save config: %w", err)
+			return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
 		}
 		applyConfig(cfg)
 
+		if jsonOutputEnabled() {
+			return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
+		}
+		fmt.Printf("Set %s = %v\n", key, stored)
 		return nil
 	},
 }
@@ -120,44 +121,61 @@ var configUnsetCmd = &cobra.Command{
 
 		key := args[0]
 
+		var wasSet bool
 		switch key {
 		case "github_proxy":
-			if cfg.GitHubProxy == "" {
+			wasSet = cfg.GitHubProxy != ""
+			cfg.GitHubProxy = ""
+			if !wasSet {
+				if jsonOutputEnabled() {
+					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+				}
 				fmt.Printf("github_proxy is not set\n")
 				return nil
 			}
-			cfg.GitHubProxy = ""
-			fmt.Printf("Unset github_proxy\n")
 		case "verbose":
-			if cfg.Verbose == nil {
+			wasSet = cfg.Verbose != nil
+			cfg.Verbose = nil
+			if !wasSet {
+				if jsonOutputEnabled() {
+					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+				}
 				fmt.Printf("verbose is not set\n")
 				return nil
 			}
-			cfg.Verbose = nil
-			fmt.Printf("Unset verbose (default: disabled)\n")
 		case "parallel_download":
-			if cfg.ParallelDownload == nil {
+			wasSet = cfg.ParallelDownload != nil
+			cfg.ParallelDownload = nil
+			if !wasSet {
+				if jsonOutputEnabled() {
+					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+				}
 				fmt.Printf("parallel_download is not set\n")
 				return nil
 			}
-			cfg.ParallelDownload = nil
-			fmt.Printf("Unset parallel_download (default: enabled)\n")
 		case "color":
-			if cfg.Color == nil {
+			wasSet = cfg.Color != nil
+			cfg.Color = nil
+			if !wasSet {
+				if jsonOutputEnabled() {
+					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+				}
 				fmt.Printf("color is not set\n")
 				return nil
 			}
-			cfg.Color = nil
-			fmt.Printf("Unset color (default: enabled)\n")
 		default:
-			return fmt.Errorf("unknown config key: %s", key)
+			return emitConfigError("config_unset", key, fmt.Errorf("unknown config key: %s", key))
 		}
 
 		if err := saveConfig(root, cfg); err != nil {
-			return fmt.Errorf("save config: %w", err)
+			return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
 		}
 		applyConfig(cfg)
 
+		if jsonOutputEnabled() {
+			return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": wasSet})
+		}
+		fmt.Printf("Unset %s\n", key)
 		return nil
 	},
 }
@@ -171,6 +189,23 @@ var configListCmd = &cobra.Command{
 		cfg, err := loadConfig(root)
 		if err != nil {
 			return err
+		}
+
+		if jsonOutputEnabled() {
+			parallel, parallelSet := configTriBool(cfg.ParallelDownload, true)
+			colorValue, colorSet := configTriBool(cfg.Color, true)
+			verboseValue, verboseSet := configTriBool(cfg.Verbose, false)
+			return emitJSON(map[string]any{
+				"command":               "config_list",
+				"github_proxy":          cfg.GitHubProxy,
+				"github_proxy_set":      cfg.GitHubProxy != "",
+				"parallel_download":     parallel,
+				"parallel_download_set": parallelSet,
+				"color":                 colorValue,
+				"color_set":             colorSet,
+				"verbose":               verboseValue,
+				"verbose_set":           verboseSet,
+			})
 		}
 
 		fmt.Printf("%sConfiguration:%s\n", colorBlue, colorReset)
@@ -193,6 +228,71 @@ func init() {
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configUnsetCmd)
 	configCmd.AddCommand(configListCmd)
+	for _, c := range []*cobra.Command{configGetCmd, configSetCmd, configUnsetCmd, configListCmd} {
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+	}
+}
+
+// emitConfigError routes a config argument error through the JSON envelope when
+// --json is set (stable code: invalid_argument), or returns it verbatim otherwise.
+func emitConfigError(command, key string, err error) error {
+	if jsonOutputEnabled() {
+		if emitErr := emitJSON(map[string]any{
+			"command": command,
+			"ok":      false,
+			"key":     key,
+			"error":   err.Error(),
+			"code":    "invalid_argument",
+		}); emitErr != nil {
+			return emitErr
+		}
+		return reportedFail()
+	}
+	return err
+}
+
+// configResolvedValue returns the resolved value and set flag for a config key.
+// Boolean keys resolve to real booleans (defaults applied); github_proxy is a string.
+func configResolvedValue(cfg *config.Basics, key string) (any, bool, error) {
+	switch key {
+	case "github_proxy":
+		return cfg.GitHubProxy, cfg.GitHubProxy != "", nil
+	case "verbose":
+		v, set := configTriBool(cfg.Verbose, false)
+		return v, set, nil
+	case "parallel_download":
+		v, set := configTriBool(cfg.ParallelDownload, true)
+		return v, set, nil
+	case "color":
+		v, set := configTriBool(cfg.Color, true)
+		return v, set, nil
+	default:
+		return nil, false, fmt.Errorf("unknown config key: %s", key)
+	}
+}
+
+// configTriBool resolves a tri-state bool pointer against its default.
+func configTriBool(v *bool, def bool) (value, set bool) {
+	if v == nil {
+		return def, false
+	}
+	return *v, true
+}
+
+// formatConfigValue renders a resolved config value for text mode.
+func formatConfigValue(key string, value any) string {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case string:
+		return v
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
 
 func loadConfig(root string) (*config.Basics, error) {
@@ -200,7 +300,29 @@ func loadConfig(root string) (*config.Basics, error) {
 }
 
 func saveConfig(root string, cfg *config.Basics) error {
+	// The data root may not exist yet (e.g. config set is the first command run);
+	// create it so config is always writable on a fresh install.
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return fmt.Errorf("create data root: %w", err)
+	}
 	return config.WriteBasics(root, cfg)
+}
+
+// emitConfigSaveError routes a config persistence failure through the JSON envelope.
+func emitConfigSaveError(command, key string, err error) error {
+	if jsonOutputEnabled() {
+		if emitErr := emitJSON(map[string]any{
+			"command": command,
+			"ok":      false,
+			"key":     key,
+			"error":   err.Error(),
+			"code":    "config_write_failed",
+		}); emitErr != nil {
+			return emitErr
+		}
+		return reportedFail()
+	}
+	return err
 }
 
 func parseConfigBool(value string) (bool, error) {

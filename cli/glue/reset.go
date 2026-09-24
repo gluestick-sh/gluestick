@@ -1,11 +1,11 @@
-﻿package main
+package main
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/gluestick-sh/core/engine"
+	"github.com/spf13/cobra"
 )
 
 // resetCmd switches the active version symlink and rebuilds shims without re-downloading.
@@ -32,15 +32,34 @@ func runReset(cmd *cobra.Command, args []string) error {
 	defer eng.Close()
 
 	var failed []string
+	var items []jsonResultItem
 	for _, pkgRef := range args {
 		pkgName := packageBaseName(pkgRef)
-		fmt.Printf("Resetting %s...\n", pkgRef)
+		if !jsonOutputEnabled() {
+			fmt.Printf("Resetting %s...\n", pkgRef)
+		}
 		if err := eng.ResetPackage(pkgRef); err != nil {
-			fmt.Printf("  %s Failed: %v\n", markFail, err)
+			items = append(items, jsonResultItemFromInstall(pkgRef, nil, err))
+			if !jsonOutputEnabled() {
+				fmt.Printf("  %s Failed: %v\n", markFail, err)
+			}
 			failed = append(failed, pkgName)
 			continue
 		}
-		fmt.Printf("  %s %s reset\n", markSuccess, pkgRef)
+		items = append(items, jsonResultItem{Ref: pkgRef})
+		if !jsonOutputEnabled() {
+			fmt.Printf("  %s %s reset\n", markSuccess, pkgRef)
+		}
+	}
+
+	if jsonOutputEnabled() {
+		if err := jsonOperationResult("reset", items); err != nil {
+			return err
+		}
+		if len(failed) > 0 {
+			return reportedFail()
+		}
+		return nil
 	}
 
 	if len(failed) > 0 {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gluestick-sh/core/apperr"
 	"github.com/gluestick-sh/core/apps"
 	"github.com/gluestick-sh/core/engine/internal/runtime"
 	"github.com/gluestick-sh/core/manifest"
@@ -21,7 +22,7 @@ func ResetPackage(e *runtime.Engine, appsDir, shimsMetaDir, pkgRef string) error
 		if err != nil || targetVer == "" {
 			targetVer, err = apps.EnsureCurrent(pkgRoot)
 			if err != nil || targetVer == "" {
-				return fmt.Errorf("%s", runtime.FormatNotInstalled(pkgName))
+				return &apperr.PackageNotInstalled{Name: pkgName}
 			}
 		}
 	}

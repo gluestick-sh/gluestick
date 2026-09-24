@@ -26,6 +26,10 @@ var unholdCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(holdCmd)
 	rootCmd.AddCommand(unholdCmd)
+	for _, c := range []*cobra.Command{holdCmd, unholdCmd} {
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+	}
 }
 
 func runHold(cmd *cobra.Command, args []string) error {
@@ -44,19 +48,42 @@ func setVersionLock(_ *cobra.Command, args []string, locked bool) error {
 	defer eng.Close()
 
 	verb := "held"
+	command := "hold"
 	if !locked {
 		verb = "unheld"
+		command = "unhold"
 	}
 
+	items := make([]jsonResultItem, 0, len(args))
 	var failed []string
 	for _, pkgRef := range args {
 		name := packageBaseName(pkgRef)
 		if err := eng.SetPackageVersionLock(name, locked); err != nil {
-			fmt.Printf("  %s %s: %v\n", markFail, pkgRef, err)
+			item := jsonResultItem{Ref: pkgRef, Error: err.Error()}
+			item.Code, item.Hint = jsonErrorInfo(err)
+			items = append(items, item)
 			failed = append(failed, name)
 			continue
 		}
-		fmt.Printf("  %s %s %s\n", markSuccess, name, verb)
+		items = append(items, jsonResultItem{Ref: pkgRef})
+	}
+
+	if jsonOutputEnabled() {
+		if err := jsonOperationResult(command, items); err != nil {
+			return err
+		}
+		if len(failed) > 0 {
+			return reportedFail()
+		}
+		return nil
+	}
+
+	for _, item := range items {
+		if item.Error != "" {
+			fmt.Printf("  %s %s: %s\n", markFail, item.Ref, item.Error)
+			continue
+		}
+		fmt.Printf("  %s %s %s\n", markSuccess, packageBaseName(item.Ref), verb)
 	}
 	if len(failed) > 0 {
 		fmt.Printf("\nFailed: %s\n", strings.Join(failed, ", "))

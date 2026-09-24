@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"fmt"
@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
+	"github.com/gluestick-sh/core/cache"
 	"github.com/gluestick-sh/core/engine"
 	"github.com/gluestick-sh/core/humanize"
 	"github.com/gluestick-sh/core/verbose"
+	"github.com/spf13/cobra"
 )
 
 // cacheCmd manages the SQLite cache index and content-store blobs.
@@ -33,6 +34,15 @@ var cacheListCmd = &cobra.Command{
 			return err
 		}
 		defer eng.Close()
+
+		if jsonOutputEnabled() {
+			packages := eng.ListCachePackages()
+			if packages == nil {
+				packages = []engine.CachePackageInfo{}
+			}
+			return emitJSON(map[string]any{"packages": packages, "total": eng.CacheSummary()})
+		}
+
 		listCacheByPackage(eng)
 		return nil
 	},
@@ -72,6 +82,11 @@ func init() {
 	cacheCmd.AddCommand(cacheRebuildCmd)
 	cacheCmd.AddCommand(cacheGCCmd)
 
+	for _, c := range []*cobra.Command{cacheListCmd, cacheClearCmd, cacheRebuildCmd, cacheGCCmd} {
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+	}
+
 	cacheClearCmd.Flags().BoolVarP(&cacheClearAll, "all", "a", false, "clear all cache index entries")
 }
 
@@ -89,11 +104,39 @@ func runCacheGC(cmd *cobra.Command, args []string) error {
 	}
 	defer eng.Close()
 
-	verbose.Progressf("glue cache gc\n")
+	var reporter cache.GCProgressReporter
+	if jsonOutputEnabled() {
+		reporter = func(cache.GCProgressEvent) {} // no-op: keep stdout pure JSON
+	} else {
+		reporter = newCLICacheGCReporter()
+		verbose.Progressf("glue cache gc\n")
+	}
 
-	_, err = eng.RunCacheGCWithProgress(newCLICacheGCReporter())
+	res, err := eng.RunCacheGCWithProgress(reporter)
 	if err != nil {
+		if jsonOutputEnabled() {
+			code, hint := jsonErrorInfo(err)
+			if emitErr := emitJSON(map[string]any{
+				"command": "cache_gc",
+				"ok":      false,
+				"error":   err.Error(),
+				"code":    code,
+				"hint":    hint,
+			}); emitErr != nil {
+				return emitErr
+			}
+			return reportedFail()
+		}
 		return fmt.Errorf("cache gc: %w", err)
+	}
+
+	if jsonOutputEnabled() {
+		return emitJSON(map[string]any{
+			"command":       "cache_gc",
+			"ok":            true,
+			"removed_blobs": res.RemovedBlobs,
+			"freed_bytes":   res.FreedBytes,
+		})
 	}
 
 	verbose.Progressf("Done.\n")
@@ -112,6 +155,24 @@ var cacheRebuildCmd = &cobra.Command{
 
 		root := glueRoot()
 		appsDir := filepath.Join(root, "apps")
+
+		if jsonOutputEnabled() {
+			count, err := eng.RebuildCacheIndex(func(string, string, int) {})
+			if err != nil {
+				code, hint := jsonErrorInfo(err)
+				if emitErr := emitJSON(map[string]any{
+					"command": "cache_rebuild",
+					"ok":      false,
+					"error":   err.Error(),
+					"code":    code,
+					"hint":    hint,
+				}); emitErr != nil {
+					return emitErr
+				}
+				return reportedFail()
+			}
+			return emitJSON(map[string]any{"command": "cache_rebuild", "ok": true, "indexed": count})
+		}
 
 		verbose.Progressf("glue cache rebuild\n")
 		verbose.Progressf("  Source: %s\n", appsDir)
@@ -187,6 +248,10 @@ func clearCacheIndexByName(eng *engine.Engine, names []string) error {
 		byName[p.Name] = p
 	}
 
+	if jsonOutputEnabled() {
+		return clearCacheIndexByNameJSON(eng, byName, names)
+	}
+
 	var cleared int
 	for _, name := range names {
 		entry, ok := byName[name]
@@ -213,10 +278,74 @@ func clearCacheIndexByName(eng *engine.Engine, names []string) error {
 	return nil
 }
 
+// clearCacheIndexByNameJSON emits the --json form of cache clear <names>.
+// Matches text semantics: nothing cleared (all names missing from the index) exits 1.
+func clearCacheIndexByNameJSON(eng *engine.Engine, byName map[string]engine.CachePackageInfo, names []string) error {
+	clearedFiles := 0
+	cleared, notIndexed := []string{}, []string{}
+	for _, name := range names {
+		entry, ok := byName[name]
+		if !ok {
+			notIndexed = append(notIndexed, name)
+			continue
+		}
+		n, err := eng.ClearCacheIndex([]string{name})
+		if err != nil {
+			code, hint := jsonErrorInfo(err)
+			if emitErr := emitJSON(map[string]any{
+				"command": "cache_clear",
+				"ok":      false,
+				"error":   err.Error(),
+				"code":    code,
+				"hint":    hint,
+			}); emitErr != nil {
+				return emitErr
+			}
+			return reportedFail()
+		}
+		if n == 0 {
+			notIndexed = append(notIndexed, name)
+			continue
+		}
+		cleared = append(cleared, name)
+		clearedFiles += entry.FileCount
+	}
+	if cleared == nil {
+		cleared = []string{}
+	}
+	if notIndexed == nil {
+		notIndexed = []string{}
+	}
+	ok := len(cleared) > 0
+	if err := emitJSON(map[string]any{
+		"command":       "cache_clear",
+		"ok":            ok,
+		"cleared":       cleared,
+		"cleared_files": clearedFiles,
+		"not_in_index":  notIndexed,
+	}); err != nil {
+		return err
+	}
+	if !ok {
+		return reportedFail()
+	}
+	return nil
+}
+
 func clearAllCacheIndex(eng *engine.Engine) error {
 	summary, err := eng.ClearAllCacheIndex()
 	if err != nil {
 		return fmt.Errorf("clear cache index: %w", err)
+	}
+	if jsonOutputEnabled() {
+		return emitJSON(map[string]any{
+			"command":    "cache_clear",
+			"ok":         true,
+			"all":        true,
+			"packages":   summary.PackageCount,
+			"files":      summary.TotalFiles,
+			"size_bytes": summary.TotalSize,
+		})
 	}
 	if summary.PackageCount == 0 {
 		fmt.Println("Cache index is empty")
