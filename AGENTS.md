@@ -28,6 +28,24 @@ go build -o shim.exe ./shim
 - `go.work` and `go.work.sum` are **committed** (build definition of the monorepo).
   Never gitignore them.
 
+### Line endings (IMPORTANT)
+
+- The repository is **LF-only** and `.gitattributes` enforces it
+  (`* text=auto eol=lf`, binaries marked `binary`); this checkout also sets
+  `core.autocrlf=false`. `gofmt -w` writes LF and drops UTF-8 BOMs, so on a CRLF
+  checkout a `gofmt -w` over several directories leaves every rewritten file with
+  a stale CRLF-era index stat: `git status` then lists it as modified ("LF will be
+  replaced by CRLF the next time Git touches it") while `git diff` shows no
+  content change — hundreds of phantom entries (249 vs 70 real files was one such
+  storm).
+- Never clear that with `git checkout -- .` / `git restore .`: it discards real
+  work (on 2026-09-25 the phantom set and the real set overlapped 0 files, but do
+  not rely on it). Use `git add --renormalize .` instead — content-identical files
+  are not staged, only their stat cache is refreshed — then confirm with
+  `git diff --name-only` (real changes) and `git diff-files --quiet` (stat view).
+- `git update-index --refresh` / `--really-refresh` do **not** fix it: they print
+  "needs update" and refuse to rewrite entries whose stat does not match.
+
 ### Dev / data isolation (IMPORTANT)
 
 - **Never build a dev binary as `glue.exe`.** Build it as `glue-alpha.exe` (or any

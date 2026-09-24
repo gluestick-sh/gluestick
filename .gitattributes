@@ -1,0 +1,27 @@
+# Glue stores every tracked file as text with LF endings.
+#
+# Why this file exists: `gofmt -w` writes LF on every platform (and drops UTF-8
+# BOMs). On a worktree checked out with CRLF (Git for Windows defaults to
+# `core.autocrlf=true`), every file gofmt rewrites keeps its CRLF-era index stat,
+# so `git status` reports it as "modified — LF will be replaced by CRLF" while
+# `git diff` shows no content change at all. That produced a 249-file
+# false-positive storm over 70 real changes. Declaring `eol=lf` here makes LF the
+# single expected form for both the repository and the working tree, so the false
+# positives cannot come back.
+#
+# The repository already stores LF for all 482 tracked blobs, so this declaration
+# needs no renormalization commit.
+
+* text=auto eol=lf
+
+# Binary artifacts (installer output, downloaded archives, icons) must never be
+# converted or diffed as text.
+*.exe   binary
+*.dll   binary
+*.zip   binary
+*.7z    binary
+*.gz    binary
+*.png   binary
+*.ico   binary
+*.jpg   binary
+*.woff2 binary
