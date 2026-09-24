@@ -86,12 +86,24 @@ func AuditFromContext(ctx context.Context) AuditInfo {
 }
 
 // RecordAudit writes one audit row to SQLite and appends the same entry to
-// <root>/logs/audit.jsonl (append-only, survives `glue cache clear`).
+// <root>/logs/audit.jsonl (append-only, survives `glue cache clear`). After the
+// append it runs the scheduled chain verification when the configured interval
+// (audit.verify_interval_hours) elapsed.
 func (e *Engine) RecordAudit(ctx context.Context, operation, pkgName, version, status string, details map[string]any) error {
+	info := AuditFromContext(ctx)
+	if err := e.recordAuditRow(info, operation, pkgName, version, status, details); err != nil {
+		return err
+	}
+	e.maybeScheduledAuditVerify(info)
+	return nil
+}
+
+// recordAuditRow is RecordAudit without the scheduled-verification hook, so the
+// `audit_verify` row itself cannot re-trigger a verification.
+func (e *Engine) recordAuditRow(info AuditInfo, operation, pkgName, version, status string, details map[string]any) error {
 	if e == nil || e.Engine == nil || e.Cache == nil {
 		return fmt.Errorf("engine not configured")
 	}
-	info := AuditFromContext(ctx)
 	if err := e.Cache.RecordActivityWithSource(operation, pkgName, version, status, info.Source, info.Actor, details); err != nil {
 		return err
 	}
@@ -115,6 +127,13 @@ type AuditVerifyResult struct {
 	// Anchor is the retained chain head of already-pruned segments (empty when
 	// the chain is verified from genesis).
 	Anchor string `json:"anchor,omitempty"`
+	// Head is the verified chain head: the hash of the newest entry. It is the
+	// value to pin externally and compare with `glue audit verify --expect`.
+	Head string `json:"head,omitempty"`
+	// Expected is the externally pinned hash when `--expect` was used (echoed so
+	// the payload documents what was verified against); a head mismatch reports
+	// ok=false with reason "head mismatch".
+	Expected string `json:"expected,omitempty"`
 }
 
 // recordAuditWarn writes the audit row and warns on stderr when it fails, so a
@@ -170,7 +189,94 @@ func (e *Engine) VerifyAuditLog() (AuditVerifyResult, error) {
 			prev = claimed
 		}
 	}
-	return AuditVerifyResult{OK: true, Entries: entries, Anchor: anchor}, nil
+	head := ""
+	if entries > 0 {
+		head = prev
+	}
+	return AuditVerifyResult{OK: true, Entries: entries, Anchor: anchor, Head: head}, nil
+}
+
+// auditVerifyStampPath is the marker remembering the last scheduled chain
+// verification, so the check does not run on every append.
+func auditVerifyStampPath(dir string) string { return filepath.Join(dir, ".audit-verify") }
+
+// auditVerifyDue reports whether the scheduled verification is due.
+func auditVerifyDue(dir string, interval time.Duration) bool {
+	info, err := os.Stat(auditVerifyStampPath(dir))
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) >= interval
+}
+
+// writeAuditVerifyStamp records "the chain was verified now" (atomic rewrite).
+func writeAuditVerifyStamp(dir string) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp := auditVerifyStampPath(dir) + ".tmp"
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := os.WriteFile(tmp, []byte(stamp), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, auditVerifyStampPath(dir))
+}
+
+// maybeScheduledAuditVerify re-verifies the hash chain once
+// audit.verify_interval_hours elapsed. It is a tripwire: a healthy chain only
+// refreshes the stamp (no audit row), while tampering records an `audit_verify`
+// row (status `broken`) and warns on stderr. Best-effort: it never fails or
+// blocks the audited operation.
+func (e *Engine) maybeScheduledAuditVerify(info AuditInfo) {
+	if e == nil || e.Config == nil || e.Config.RootDir == "" {
+		return
+	}
+	settings := auditSettingsFor(e.Config.RootDir)
+	if !settings.VerifyEnabled() {
+		return
+	}
+	interval := settings.VerifyInterval()
+	dir := filepath.Join(e.Config.RootDir, "logs")
+	if !auditVerifyDue(dir, interval) {
+		return
+	}
+	// Serialize with appends and other processes; re-check under the lock so at
+	// most one verification runs per interval.
+	unlock, err := acquireAuditLock(dir)
+	if err != nil {
+		return
+	}
+	if !auditVerifyDue(dir, interval) {
+		unlock()
+		return
+	}
+	result, verifyErr := e.VerifyAuditLog()
+	if verifyErr != nil {
+		unlock()
+		return
+	}
+	// Stamp before anything else: a broken chain must not re-report on every
+	// append inside the interval.
+	_ = writeAuditVerifyStamp(dir)
+	unlock()
+
+	if result.OK {
+		return
+	}
+	details := map[string]any{
+		"scheduled": true,
+		"entries":   result.Entries,
+		"brokenAt":  result.BrokenAt,
+		"reason":    result.Reason,
+	}
+	if result.Head != "" {
+		details["head"] = result.Head
+	}
+	if result.Anchor != "" {
+		details["anchor"] = result.Anchor
+	}
+	verbose.Progressf("Warning: audit chain broken at entry %d (%s); run `glue audit verify`\n", result.BrokenAt, result.Reason)
+	_ = e.recordAuditRow(info, "audit_verify", "", "", "broken", details)
 }
 
 // auditSegmentFiles returns rotated segments plus the active file, in write

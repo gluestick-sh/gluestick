@@ -41,6 +41,10 @@ func runReadinessDoctor(cmd *cobra.Command, offline, probeShim, fix bool) error 
 		report.Fixes = fixes
 	}
 
+	// Best-effort audit row so `glue audit list` shows every readiness run and
+	// why it failed; an audit failure must never fail the check itself.
+	_ = eng.RecordAgentDoctorActivity(report)
+
 	if jsonOutputEnabled() {
 		if err := emitJSON(report); err != nil {
 			return err

@@ -209,7 +209,7 @@ command exits 1 when any ref failed.
 `config_list` keys: `github_proxy(+_set)`, `parallel_download(+_set)`,
 `color(+_set)`, `verbose(+_set)`, `agent_auto_yes`, `agent_policy_mode`,
 `agent_policy_deny`, `agent_policy_protected`, `audit_max_bytes`,
-`audit_keep_segments`.
+`audit_keep_segments`, `audit_verify_interval_hours`.
 
 ## bucket
 
@@ -246,10 +246,22 @@ command exits 1 when any ref failed.
   carry `prev`/`hash`.
 - `sqlite` entries come from `activity_log`; `jsonl` reads the rotating,
   hash-chained `<root>/logs/audit.jsonl` (+ segments).
-- `glue audit verify` → `{ "ok": true, "entries": 2 }`; after segments were
-  pruned it also reports `anchor` (the chain head the surviving entries start
-  from). A break reports
+- `glue audit verify` → `{ "ok": true, "entries": 2, "head": "9f2c…" }`; after
+  segments were pruned it also reports `anchor` (the chain head the surviving
+  entries start from). A break reports
   `{ "ok": false, "entries": 1, "brokenAt": 2, "reason": "hash mismatch" }`.
+- `head` is the hash of the newest entry — the value to pin outside the machine.
+  `glue audit verify --expect <head>` fails with
+  `{ "ok": false, "reason": "head mismatch", "head": "…", "expected": "…" }` when
+  the pinned hash no longer matches; `expected` echoes the pinned value whenever
+  `--expect` was used.
+- Scheduled verification: `audit.verify_interval_hours` (default 24, `off` =
+  disabled) re-verifies the chain after an audited operation once the interval
+  elapsed. A healthy chain only refreshes `<root>/logs/.audit-verify` (no audit
+  row); tampering records an `audit_verify` row with `status: "broken"` and
+  `details.brokenAt`, plus a stderr warning.
+- `glue doctor` and `glue env` record their own operations (`doctor` / `env`), so
+  the activity feed tells the two check-ups apart.
 
 ## MCP tools
 

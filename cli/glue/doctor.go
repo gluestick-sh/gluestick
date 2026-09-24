@@ -55,6 +55,8 @@ func runEnvDoctor(cmd *cobra.Command) error {
 	defer eng.Close()
 
 	report := eng.RunDoctor(cmd.Context())
+	// Best-effort audit row for `glue env`, mirroring glue doctor.
+	_ = eng.RecordEnvironmentActivity(report)
 	if jsonOutputEnabled() {
 		return emitJSON(report)
 	}

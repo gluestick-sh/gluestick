@@ -38,6 +38,54 @@ func (e *Engine) ClearActivityLogSince(since string) (int64, error) {
 
 // RecordDoctorActivity logs an environment diagnosis run to the activity log.
 func (e *Engine) RecordDoctorActivity(report DoctorReport) error {
+	return e.recordDoctorActivity("doctor", report)
+}
+
+// RecordEnvironmentActivity logs a `glue env` run. It shares the DoctorReport
+// shape with doctor but is its own audit operation, so `glue audit list` can
+// tell the two commands apart.
+func (e *Engine) RecordEnvironmentActivity(report DoctorReport) error {
+	return e.recordDoctorActivity("env", report)
+}
+
+// RecordAgentDoctorActivity logs a `glue doctor` agent-readiness run: the row
+// carries the verdict (agentReady/score) plus the failing check ids, so the
+// audit trail explains why a machine was reported not ready.
+func (e *Engine) RecordAgentDoctorActivity(report AgentDoctorReport) error {
+	details := map[string]interface{}{
+		"ok":         report.OK,
+		"agentReady": report.AgentReady,
+		"score":      report.Score,
+		"passed":     report.Summary.Passed,
+		"total":      report.Summary.Total,
+		"skipped":    report.Summary.Skipped,
+	}
+	if len(report.Summary.BlockingFailed) > 0 {
+		details["blockingFailedChecks"] = report.Summary.BlockingFailed
+	}
+	if len(report.Summary.AdvisoryFailed) > 0 {
+		details["advisoryFailedChecks"] = report.Summary.AdvisoryFailed
+	}
+	if len(report.Fixes) > 0 {
+		applied := 0
+		for _, fix := range report.Fixes {
+			if fix.Applied {
+				applied++
+			}
+		}
+		details["fixes"] = len(report.Fixes)
+		details["fixesApplied"] = applied
+	}
+	status := "success"
+	if !report.AgentReady {
+		status = "failed"
+	}
+	return e.RecordAudit(context.Background(), "doctor", "", "", status, details)
+}
+
+// recordDoctorActivity writes the shared DoctorReport row for a given operation
+// name (doctor or env).
+func (e *Engine) recordDoctorActivity(operation string, report DoctorReport) error {
 	total := len(report.Checks)
 	passed := 0
 	var failed []string
@@ -62,7 +110,7 @@ func (e *Engine) RecordDoctorActivity(report DoctorReport) error {
 	if len(failed) > 0 {
 		details["failedChecks"] = failed
 	}
-	return e.RecordAudit(context.Background(), "doctor", "", "", status, details)
+	return e.RecordAudit(context.Background(), operation, "", "", status, details)
 }
 
 // RecordCheckUpdatesActivity logs a manual update-check result to the activity log.

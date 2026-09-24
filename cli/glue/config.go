@@ -138,7 +138,7 @@ var configSetCmd = &cobra.Command{
 			cfg.Color = &enabled
 		default:
 			return emitConfigError("config_set", key, fmt.Errorf(
-				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected\n  audit.max_bytes\n  audit.keep_segments", key))
+				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected\n  audit.max_bytes\n  audit.keep_segments\n  audit.verify_interval_hours", key))
 		}
 
 		if err := saveConfig(root, cfg); err != nil {
@@ -298,21 +298,22 @@ var configListCmd = &cobra.Command{
 			colorValue, colorSet := configTriBool(cfg.Color, true)
 			verboseValue, verboseSet := configTriBool(cfg.Verbose, false)
 			return emitJSON(map[string]any{
-				"command":                "config_list",
-				"github_proxy":           cfg.GitHubProxy,
-				"github_proxy_set":       cfg.GitHubProxy != "",
-				"parallel_download":      parallel,
-				"parallel_download_set":  parallelSet,
-				"color":                  colorValue,
-				"color_set":              colorSet,
-				"verbose":                verboseValue,
-				"verbose_set":            verboseSet,
-				"agent_auto_yes":         agent.AutoYes,
-				"agent_policy_mode":      agent.Policy.Mode,
-				"agent_policy_deny":      agent.Policy.Deny,
-				"agent_policy_protected": agent.Policy.Protected,
-				"audit_max_bytes":        audit.MaxBytes,
-				"audit_keep_segments":    audit.KeepSegments,
+				"command":                     "config_list",
+				"github_proxy":                cfg.GitHubProxy,
+				"github_proxy_set":            cfg.GitHubProxy != "",
+				"parallel_download":           parallel,
+				"parallel_download_set":       parallelSet,
+				"color":                       colorValue,
+				"color_set":                   colorSet,
+				"verbose":                     verboseValue,
+				"verbose_set":                 verboseSet,
+				"agent_auto_yes":              agent.AutoYes,
+				"agent_policy_mode":           agent.Policy.Mode,
+				"agent_policy_deny":           agent.Policy.Deny,
+				"agent_policy_protected":      agent.Policy.Protected,
+				"audit_max_bytes":             audit.MaxBytes,
+				"audit_keep_segments":         audit.KeepSegments,
+				"audit_verify_interval_hours": audit.VerifyIntervalHours,
 			})
 		}
 		fmt.Printf("%sConfiguration:%s\n", colorBlue, colorReset)
@@ -330,6 +331,7 @@ var configListCmd = &cobra.Command{
 		fmt.Printf("  agent.policy.protected = %s\n", strings.Join(agent.Policy.Protected, ","))
 		fmt.Printf("  audit.max_bytes = %d\n", audit.MaxBytes)
 		fmt.Printf("  audit.keep_segments = %d\n", audit.KeepSegments)
+		fmt.Printf("  audit.verify_interval_hours = %d\n", audit.VerifyIntervalHours)
 
 		return nil
 	},
@@ -478,8 +480,9 @@ func splitConfigList(value string) []string {
 // auditConfigKeys are the config.json audit keys exposed by `glue config`.
 // Both keys report as "set" because the reader always resolves defaults.
 var auditConfigKeys = map[string]bool{
-	"audit.max_bytes":     true,
-	"audit.keep_segments": true,
+	"audit.max_bytes":             true,
+	"audit.keep_segments":         true,
+	"audit.verify_interval_hours": true,
 }
 
 func isAuditConfigKey(key string) bool { return auditConfigKeys[key] }
@@ -491,6 +494,8 @@ func resolveAuditConfigValue(settings config.AuditSettings, key string) (any, bo
 		return settings.MaxBytes, true, nil
 	case "audit.keep_segments":
 		return settings.KeepSegments, true, nil
+	case "audit.verify_interval_hours":
+		return settings.VerifyIntervalHours, true, nil
 	}
 	return nil, false, fmt.Errorf("unknown config key: %s", key)
 }
@@ -527,6 +532,17 @@ func setAuditConfigValue(settings *config.AuditSettings, key, value string) (any
 		}
 		settings.KeepSegments = keep
 		return config.NormalizeAuditSettings(*settings).KeepSegments, nil
+	case "audit.verify_interval_hours":
+		if raw == "off" || raw == "never" || raw == "disabled" {
+			settings.VerifyIntervalHours = config.AuditVerifyDisabled
+			return settings.VerifyIntervalHours, nil
+		}
+		hours, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("audit.verify_interval_hours must be a whole number of hours, or off to disable the scheduled verification")
+		}
+		settings.VerifyIntervalHours = hours
+		return config.NormalizeAuditSettings(*settings).VerifyIntervalHours, nil
 	}
 	return nil, fmt.Errorf("unknown config key: %s", key)
 }
@@ -538,8 +554,11 @@ func resetAuditConfigValue(settings *config.AuditSettings, key string) {
 		settings.MaxBytes = config.DefaultAuditMaxBytes
 	case "audit.keep_segments":
 		settings.KeepSegments = config.DefaultAuditKeepSegments
+	case "audit.verify_interval_hours":
+		settings.VerifyIntervalHours = config.DefaultAuditVerifyIntervalHours
 	}
 }
+
 // formatConfigValue renders a resolved config value for text mode.
 func formatConfigValue(key string, value any) string {
 	switch v := value.(type) {

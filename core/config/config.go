@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // configFile represents the JSON structure of the config file, containing all serializable settings.
@@ -111,16 +112,20 @@ func WriteAgent(rootDir string, settings AgentSettings) error {
 	return writeConfigFile(rootDir, cfg)
 }
 
-// AuditSettings is the "audit" section of config.json: the rotation thresholds
-// for the append-only hash-chained trail (`<root>/logs/audit.jsonl`, §4.6.1).
+// AuditSettings is the "audit" section of config.json: the rotation and
+// verification policy for the append-only hash-chained trail
+// (`<root>/logs/audit.jsonl`, §4.6.1).
 //
 // MaxBytes: 0 (unset) means DefaultAuditMaxBytes; a negative value disables
 // size-based rotation, so the active file grows without bound.
 // KeepSegments: 0 (unset) means DefaultAuditKeepSegments; a negative value
 // keeps every rotated segment.
+// VerifyIntervalHours: 0 (unset) means DefaultAuditVerifyIntervalHours; a
+// negative value disables the scheduled chain re-verification.
 type AuditSettings struct {
-	MaxBytes     int64 `json:"max_bytes,omitempty"`
-	KeepSegments int   `json:"keep_segments,omitempty"`
+	MaxBytes            int64 `json:"max_bytes,omitempty"`
+	KeepSegments        int   `json:"keep_segments,omitempty"`
+	VerifyIntervalHours int   `json:"verify_interval_hours,omitempty"`
 }
 
 const (
@@ -133,16 +138,27 @@ const (
 	// MaxAuditKeepSegments caps how many segments config.json may retain so a
 	// typo cannot pin unbounded disk usage.
 	MaxAuditKeepSegments = 100
+	// DefaultAuditVerifyIntervalHours is how often the chain is re-verified when
+	// config.json does not set audit.verify_interval_hours.
+	DefaultAuditVerifyIntervalHours = 24
 	// AuditRotationDisabled assigned to AuditSettings.MaxBytes stops rotation.
 	AuditRotationDisabled int64 = -1
 	// AuditKeepAllSegments assigned to AuditSettings.KeepSegments retains every
 	// rotated segment.
 	AuditKeepAllSegments = -1
+	// AuditVerifyDisabled assigned to AuditSettings.VerifyIntervalHours turns
+	// the scheduled chain verification off.
+	AuditVerifyDisabled = -1
 )
 
-// DefaultAuditSettings is the built-in rotation policy (8 MiB, 5 segments).
+// DefaultAuditSettings is the built-in policy: 8 MiB / 5 segments, verified
+// once a day.
 func DefaultAuditSettings() AuditSettings {
-	return AuditSettings{MaxBytes: DefaultAuditMaxBytes, KeepSegments: DefaultAuditKeepSegments}
+	return AuditSettings{
+		MaxBytes:            DefaultAuditMaxBytes,
+		KeepSegments:        DefaultAuditKeepSegments,
+		VerifyIntervalHours: DefaultAuditVerifyIntervalHours,
+	}
 }
 
 // NormalizeAuditSettings fills unset (zero) fields with their defaults and caps
@@ -159,6 +175,9 @@ func NormalizeAuditSettings(s AuditSettings) AuditSettings {
 	case out.KeepSegments > MaxAuditKeepSegments:
 		out.KeepSegments = MaxAuditKeepSegments
 	}
+	if out.VerifyIntervalHours == 0 {
+		out.VerifyIntervalHours = DefaultAuditVerifyIntervalHours
+	}
 	return out
 }
 
@@ -167,6 +186,14 @@ func (a AuditSettings) RotationEnabled() bool { return a.MaxBytes > 0 }
 
 // PruneEnabled reports whether rotated segments are pruned past the keep count.
 func (a AuditSettings) PruneEnabled() bool { return a.KeepSegments >= 0 }
+
+// VerifyEnabled reports whether the scheduled chain verification runs.
+func (a AuditSettings) VerifyEnabled() bool { return a.VerifyIntervalHours > 0 }
+
+// VerifyInterval is the scheduled chain-verification interval.
+func (a AuditSettings) VerifyInterval() time.Duration {
+	return time.Duration(a.VerifyIntervalHours) * time.Hour
+}
 
 // ReadAudit returns the normalized audit settings from config.json. A missing
 // file or missing "audit" section yields DefaultAuditSettings.

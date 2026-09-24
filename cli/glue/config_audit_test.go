@@ -25,6 +25,7 @@ func TestConfigAuditKeys_roundTrip(t *testing.T) {
 
 	run(configSetCmd, "audit.max_bytes", "1048576")
 	run(configSetCmd, "audit.keep_segments", "3")
+	run(configSetCmd, "audit.verify_interval_hours", "6")
 
 	var got struct {
 		Value any `json:"value"`
@@ -43,15 +44,19 @@ func TestConfigAuditKeys_roundTrip(t *testing.T) {
 	if settings.MaxBytes != 1048576 || settings.KeepSegments != 3 {
 		t.Fatalf("config.json audit = %+v, want 1048576 bytes / 3 segments", settings)
 	}
+	if settings.VerifyIntervalHours != 6 {
+		t.Fatalf("verify_interval_hours = %d, want 6", settings.VerifyIntervalHours)
+	}
 
 	var list struct {
-		MaxBytes     int64 `json:"audit_max_bytes"`
-		KeepSegments int   `json:"audit_keep_segments"`
+		MaxBytes            int64 `json:"audit_max_bytes"`
+		KeepSegments        int   `json:"audit_keep_segments"`
+		VerifyIntervalHours int   `json:"audit_verify_interval_hours"`
 	}
 	if err := json.Unmarshal([]byte(run(configListCmd)), &list); err != nil {
 		t.Fatalf("config list JSON: %v", err)
 	}
-	if list.MaxBytes != 1048576 || list.KeepSegments != 3 {
+	if list.MaxBytes != 1048576 || list.KeepSegments != 3 || list.VerifyIntervalHours != 6 {
 		t.Fatalf("config list = %+v, want the audit settings just written", list)
 	}
 
@@ -68,12 +73,13 @@ func TestConfigAuditKeys_roundTrip(t *testing.T) {
 	// parsed as a flag by cobra).
 	run(configSetCmd, "audit.max_bytes", "off")
 	run(configSetCmd, "audit.keep_segments", "all")
+	run(configSetCmd, "audit.verify_interval_hours", "off")
 	settings, err = config.ReadAudit(root)
 	if err != nil {
 		t.Fatalf("ReadAudit: %v", err)
 	}
-	if settings.RotationEnabled() || settings.PruneEnabled() {
-		t.Fatalf("audit = %+v, want rotation and pruning disabled by the keywords", settings)
+	if settings.RotationEnabled() || settings.PruneEnabled() || settings.VerifyEnabled() {
+		t.Fatalf("audit = %+v, want rotation, pruning and verification all off", settings)
 	}
 }
 
@@ -91,5 +97,9 @@ func TestConfigAuditKeys_rejectInvalid(t *testing.T) {
 	_ = captureStdoutToFile(t, func() { runErr = configSetCmd.RunE(configSetCmd, []string{"audit.keep_segments", "1000"}) })
 	if runErr == nil {
 		t.Fatal("config set audit.keep_segments 1000: want an error")
+	}
+	_ = captureStdoutToFile(t, func() { runErr = configSetCmd.RunE(configSetCmd, []string{"audit.verify_interval_hours", "soon"}) })
+	if runErr == nil {
+		t.Fatal("config set audit.verify_interval_hours soon: want an error")
 	}
 }

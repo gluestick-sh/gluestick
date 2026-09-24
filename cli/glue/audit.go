@@ -12,6 +12,7 @@ var (
 	auditSince   string
 	auditLimit   int
 	auditJSONL   bool
+	auditExpect  string
 )
 
 // auditCmd queries the append-only audit trail (Phase 2 §4.6.1).
@@ -47,6 +48,7 @@ func init() {
 	auditListCmd.Flags().StringVar(&auditSince, "since", "", "only entries at/after this RFC3339 timestamp")
 	auditListCmd.Flags().IntVar(&auditLimit, "limit", 50, "maximum entries (0 = all)")
 	auditListCmd.Flags().BoolVar(&auditJSONL, "jsonl", false, "read the append-only logs/audit.jsonl (rotated segments included) instead of SQLite")
+	auditVerifyCmd.Flags().StringVar(&auditExpect, "expect", "", "fail unless the verified chain head equals this externally pinned hash")
 }
 
 // auditFormat labels the source of `audit list` output.
@@ -68,6 +70,16 @@ func runAuditVerify(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("audit verify: %w", err)
 	}
+	// External anchor: an attacker who rewrote the JSONL and recomputed the
+	// chain cannot reproduce the pinned head. The pinned value is echoed so the
+	// payload documents what was verified against.
+	if auditExpect != "" {
+		result.Expected = auditExpect
+		if result.OK && result.Head != auditExpect {
+			result.OK = false
+			result.Reason = "head mismatch"
+		}
+	}
 	if jsonOutputEnabled() {
 		if err := emitJSON(result); err != nil {
 			return err
@@ -78,11 +90,20 @@ func runAuditVerify(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	if result.OK {
-		fmt.Printf("%s Audit chain OK (%d entries).\n", markSuccess, result.Entries)
+		if result.Head != "" {
+			fmt.Printf("%s Audit chain OK (%d entries, head %s).\n", markSuccess, result.Entries, auditHashShort(result.Head))
+		} else {
+			fmt.Printf("%s Audit chain OK (%d entries).\n", markSuccess, result.Entries)
+		}
 		if result.Anchor != "" {
 			fmt.Printf("  (oldest segments were pruned; chain verified from anchor %s)\n", auditHashShort(result.Anchor))
 		}
 		return nil
+	}
+	if result.Expected != "" {
+		fmt.Printf("%s Audit chain head %s does not match the pinned anchor %s\n",
+			markFail, auditHashShort(result.Head), auditHashShort(result.Expected))
+		return reportedFail()
 	}
 	fmt.Printf("%s Audit chain broken at entry %d: %s\n", markFail, result.BrokenAt, result.Reason)
 	return reportedFail()

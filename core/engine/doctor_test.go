@@ -38,15 +38,74 @@ func TestRecordDoctorActivity(t *testing.T) {
 		t.Fatalf("RecordDoctorActivity failed: %v", err)
 	}
 
+	// glue env shares the DoctorReport shape but is its own audit operation.
+	if err := eng.RecordEnvironmentActivity(DoctorReport{
+		OK: true,
+		Checks: []DoctorCheck{
+			{ID: message.DoctorCheckGlueRoot, OK: true},
+			{ID: message.DoctorCheckGit, OK: true},
+		},
+	}); err != nil {
+		t.Fatalf("RecordEnvironmentActivity: %v", err)
+	}
+
+	// glue doctor's readiness report keeps the verdict and the failing checks.
+	if err := eng.RecordAgentDoctorActivity(AgentDoctorReport{
+		OK:         false,
+		AgentReady: false,
+		Score:      64,
+		Summary: AgentDoctorSummary{
+			Total: 23, Passed: 20, Failed: 2, Skipped: 1,
+			BlockingFailed: []string{"shim_path"},
+		},
+		Fixes: []AgentFixResult{{Check: "buckets", Action: "Add main bucket", Applied: true}},
+	}); err != nil {
+		t.Fatalf("RecordAgentDoctorActivity: %v", err)
+	}
+
 	rows, err := eng.QueryActivityLog("", 10, 0)
 	if err != nil {
 		t.Fatalf("QueryActivityLog: %v", err)
 	}
-	if len(rows) < 2 {
-		t.Fatalf("expected at least 2 activity rows, got %d", len(rows))
+	if len(rows) < 4 {
+		t.Fatalf("expected at least 4 activity rows, got %d", len(rows))
+	}
+	// Rows are newest first: keep the newest row per operation.
+	latest := map[string]map[string]any{}
+	for _, row := range rows {
+		op, _ := row["operation"].(string)
+		if _, seen := latest[op]; !seen {
+			latest[op] = row
+		}
 	}
 	if op, _ := rows[0]["operation"].(string); op != "doctor" {
 		t.Fatalf("latest operation = %q, want doctor", op)
+	}
+	doctorRow, ok := latest["doctor"]
+	if !ok {
+		t.Fatalf("missing doctor row in %+v", rows)
+	}
+	if status, _ := doctorRow["status"].(string); status != "failed" {
+		t.Fatalf("doctor status = %q, want failed while agentReady is false", status)
+	}
+	doctorDetails, _ := doctorRow["details"].(map[string]any)
+	if doctorDetails["agentReady"] != false || doctorDetails["score"] != float64(64) {
+		t.Fatalf("doctor details = %+v, want agentReady=false score=64", doctorDetails)
+	}
+	if doctorDetails["fixesApplied"] != float64(1) {
+		t.Fatalf("doctor details = %+v, want fixesApplied=1", doctorDetails)
+	}
+
+	envRow, ok := latest["env"]
+	if !ok {
+		t.Fatalf("missing env row in %+v", rows)
+	}
+	if status, _ := envRow["status"].(string); status != "success" {
+		t.Fatalf("env status = %q, want success", status)
+	}
+	envDetails, _ := envRow["details"].(map[string]any)
+	if envDetails["ok"] != true || envDetails["passed"] != float64(2) {
+		t.Fatalf("env details = %+v, want ok=true passed=2", envDetails)
 	}
 }
 

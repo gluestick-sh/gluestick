@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gluestick-sh/core/config"
 )
@@ -266,6 +267,195 @@ func TestAuditRotation_keepAllSegments(t *testing.T) {
 	}
 	if result, err := eng.VerifyAuditLog(); err != nil || !result.OK || result.Entries != 6 {
 		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK with 6 entries", result, err)
+	}
+}
+
+// TestAuditVerifyHead_tracksNewestEntry pins the external-anchor contract: the
+// verified head is the hash of the newest entry and moves when the log grows.
+func TestAuditVerifyHead_tracksNewestEntry(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+
+	_ = eng.RecordAudit(context.Background(), "install", "git", "2.54.0", "success", nil)
+	result, err := eng.VerifyAuditLog()
+	if err != nil {
+		t.Fatalf("VerifyAuditLog: %v", err)
+	}
+	want, err := lastAuditHash(auditLogPath(root))
+	if err != nil {
+		t.Fatalf("lastAuditHash: %v", err)
+	}
+	if result.Head == "" || result.Head != want {
+		t.Fatalf("head = %q, want the newest entry hash %q", result.Head, want)
+	}
+
+	_ = eng.RecordAudit(context.Background(), "install", "nodejs", "1.0.0", "success", nil)
+	next, err := eng.VerifyAuditLog()
+	if err != nil {
+		t.Fatalf("VerifyAuditLog: %v", err)
+	}
+	if next.Head == result.Head {
+		t.Fatalf("head did not move after an append (%q)", next.Head)
+	}
+}
+
+// TestScheduledAuditVerify_quietWhenHealthy pins the tripwire contract: a
+// healthy chain leaves no audit row behind (the stamp is the local evidence).
+func TestScheduledAuditVerify_quietWhenHealthy(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{VerifyIntervalHours: 1})
+
+	for i := 0; i < 3; i++ {
+		_ = eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", nil)
+	}
+
+	if rows := auditVerifyRows(t, eng); len(rows) != 0 {
+		t.Fatalf("audit_verify rows = %d, want none for a healthy chain", len(rows))
+	}
+	if _, err := os.Stat(auditVerifyStampPath(filepath.Join(root, "logs"))); err != nil {
+		t.Fatalf("stat verification stamp: %v", err)
+	}
+	if result, err := eng.VerifyAuditLog(); err != nil || !result.OK || result.Entries != 3 {
+		t.Fatalf("VerifyAuditLog = %+v (err=%v), want OK with 3 entries", result, err)
+	}
+}
+
+// TestScheduledAuditVerify_runsWhenDue ages the stamp past the configured
+// interval and checks the next audited operation re-verifies (stamp refreshed).
+func TestScheduledAuditVerify_runsWhenDue(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{VerifyIntervalHours: 1})
+
+	_ = eng.RecordAudit(context.Background(), "install", "git", "2.54.0", "success", nil)
+	stampPath := auditVerifyStampPath(filepath.Join(root, "logs"))
+	ageAuditVerifyStamp(t, root, 48*time.Hour)
+
+	_ = eng.RecordAudit(context.Background(), "install", "nodejs", "1.0.0", "success", nil)
+
+	info, err := os.Stat(stampPath)
+	if err != nil {
+		t.Fatalf("stat verification stamp: %v", err)
+	}
+	if time.Since(info.ModTime()) > time.Minute {
+		t.Fatalf("stamp mtime = %v, want a fresh stamp after the due verification", info.ModTime())
+	}
+	if rows := auditVerifyRows(t, eng); len(rows) != 0 {
+		t.Fatalf("audit_verify rows = %d, want none for a healthy chain", len(rows))
+	}
+}
+
+// TestScheduledAuditVerify_reportsBrokenChain tampers with the log, ages the
+// stamp and asserts the next audited operation records one broken audit_verify
+// row — and only one, until the interval elapses again.
+func TestScheduledAuditVerify_reportsBrokenChain(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{VerifyIntervalHours: 1})
+
+	_ = eng.RecordAudit(context.Background(), "install", "git", "2.54.0", "success", nil)
+
+	path := auditLogPath(root)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read audit.jsonl: %v", err)
+	}
+	tampered := strings.Replace(string(data), `"package":"git"`, `"package":"got"`, 1)
+	if err := os.WriteFile(path, []byte(tampered), 0600); err != nil {
+		t.Fatalf("write tampered audit.jsonl: %v", err)
+	}
+	ageAuditVerifyStamp(t, root, 48*time.Hour)
+
+	_ = eng.RecordAudit(context.Background(), "install", "nodejs", "1.0.0", "success", nil)
+
+	rows := auditVerifyRows(t, eng)
+	if len(rows) != 1 {
+		t.Fatalf("audit_verify rows = %d, want exactly 1", len(rows))
+	}
+	if status, _ := rows[0]["status"].(string); status != "broken" {
+		t.Fatalf("audit_verify status = %q, want broken", status)
+	}
+	details, _ := rows[0]["details"].(map[string]any)
+	if details["brokenAt"] != float64(1) || details["scheduled"] != true {
+		t.Fatalf("audit_verify details = %+v, want brokenAt=1 scheduled=true", details)
+	}
+
+	// The stamp was refreshed before the row was written, so the following
+	// appends stay quiet inside the interval.
+	_ = eng.RecordAudit(context.Background(), "install", "python", "3.13.0", "success", nil)
+	if rows := auditVerifyRows(t, eng); len(rows) != 1 {
+		t.Fatalf("audit_verify rows = %d, want still 1 inside the interval", len(rows))
+	}
+}
+
+// TestScheduledAuditVerify_disabledByConfig pins audit.verify_interval_hours < 0:
+// nothing is verified and no stamp is written.
+func TestScheduledAuditVerify_disabledByConfig(t *testing.T) {
+	root := t.TempDir()
+	eng, err := NewEngine(&EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	writeAuditSettings(t, root, config.AuditSettings{VerifyIntervalHours: config.AuditVerifyDisabled})
+
+	for i := 0; i < 3; i++ {
+		_ = eng.RecordAudit(context.Background(), "install", fmt.Sprintf("pkg%d", i), "1.0.0", "success", nil)
+	}
+
+	if rows := auditVerifyRows(t, eng); len(rows) != 0 {
+		t.Fatalf("audit_verify rows = %d, want none while the schedule is off", len(rows))
+	}
+	if _, err := os.Stat(auditVerifyStampPath(filepath.Join(root, "logs"))); !os.IsNotExist(err) {
+		t.Fatalf("stamp err = %v, want no stamp while the schedule is off", err)
+	}
+}
+
+// auditVerifyRows returns the audit_verify activity rows (newest first).
+func auditVerifyRows(t *testing.T, eng *Engine) []map[string]any {
+	t.Helper()
+	rows, err := eng.QueryActivityLog("", 50, 0)
+	if err != nil {
+		t.Fatalf("QueryActivityLog: %v", err)
+	}
+	out := []map[string]any{}
+	for _, row := range rows {
+		if op, _ := row["operation"].(string); op == "audit_verify" {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// ageAuditVerifyStamp backdates the scheduled-verification stamp so the next
+// audited operation sees a due verification.
+func ageAuditVerifyStamp(t *testing.T, root string, age time.Duration) {
+	t.Helper()
+	path := auditVerifyStampPath(filepath.Join(root, "logs"))
+	if _, err := os.Stat(path); err != nil {
+		// No stamp yet: the verification is due anyway.
+		return
+	}
+	when := time.Now().Add(-age)
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatalf("Chtimes(%s): %v", path, err)
 	}
 }
 

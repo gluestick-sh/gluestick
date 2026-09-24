@@ -74,6 +74,19 @@ glue config set agent.policy.protected git,nodejs
 - `<data root>/logs/audit.jsonl` is append-only and hash-chained
   (`prev`/`hash` per entry). It rotates into `audit-<UTC timestamp>.jsonl`,
   keeping the last 5 segments; the chain continues across rotation.
+- Rotation is configurable: `audit.max_bytes` (`0` = never rotate) and
+  `audit.keep_segments` (negative = keep every segment).
+- `glue audit verify` reports the chain `head`; pin it outside the machine and
+  compare with `glue audit verify --expect <hash>` (mismatch → exit 1,
+  `reason: "head mismatch"`). After pruning, verification starts from
+  `<data root>/logs/audit.anchor`.
+- Scheduled verification: `audit.verify_interval_hours` (default 24, `off` =
+  disabled) re-verifies the chain after an audited operation once the interval
+  elapsed. A healthy chain only refreshes `<data root>/logs/.audit-verify`;
+  tampering records an `audit_verify` row (`status: "broken"`) and warns on
+  stderr.
+- `glue doctor` and `glue env` write their own activity operations (`doctor` /
+  `env`), so `glue audit list --json` shows which check-up produced a row.
 - Rotation is configurable: `glue config set audit.max_bytes 8388608` and
   `glue config set audit.keep_segments 5` (defaults). `audit.max_bytes off`
   disables rotation; `audit.keep_segments all` keeps every segment (`--`
