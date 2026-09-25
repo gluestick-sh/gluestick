@@ -31,3 +31,20 @@ func TestPackageNotInstalledIs(t *testing.T) {
 		t.Fatal("expected ErrPackageNotInstalled")
 	}
 }
+
+func TestBucketNotFoundIs(t *testing.T) {
+	err := &BucketNotFound{Name: "extras"}
+	if !errors.Is(err, ErrBucketNotFound) {
+		t.Fatal("expected ErrBucketNotFound")
+	}
+	if err.Error() != "bucket not found: extras" {
+		t.Fatalf("Error() = %q, want the historic text", err.Error())
+	}
+	wrapped := fmt.Errorf("remove bucket: %w", err)
+	if !errors.Is(wrapped, ErrBucketNotFound) {
+		t.Fatal("expected wrapped ErrBucketNotFound")
+	}
+	if errors.Is(err, ErrBucketNotInstalled) {
+		t.Fatal("BucketNotFound must not be confused with BucketNotInstalled")
+	}
+}

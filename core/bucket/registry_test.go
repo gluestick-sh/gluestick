@@ -1,9 +1,12 @@
 package bucket
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gluestick-sh/core/apperr"
 )
 
 func TestRegistryReloadFromDisk_nonGitBucket(t *testing.T) {
@@ -67,6 +70,43 @@ func TestRegistryGetManifestPath(t *testing.T) {
 	_, _, err = reg.GetManifestPath("custom/vim")
 	if err == nil {
 		t.Fatal("expected error for missing bucket")
+	}
+}
+
+// TestRegistryRemove pins the typed missing-bucket error
+// (apperr.ErrBucketNotFound, historic message text preserved) and the directory
+// cleanup on a successful removal.
+func TestRegistryRemove(t *testing.T) {
+	root := t.TempDir()
+	bucketDir := filepath.Join(root, "buckets", "custom")
+	if err := os.MkdirAll(filepath.Join(bucketDir, "bucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := NewRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.ReloadFromDisk(); err != nil {
+		t.Fatal(err)
+	}
+
+	missing := reg.Remove("nope")
+	if !errors.Is(missing, apperr.ErrBucketNotFound) {
+		t.Fatalf("Remove(missing) error = %v, want apperr.ErrBucketNotFound", missing)
+	}
+	if missing == nil || missing.Error() != "bucket not found: nope" {
+		t.Fatalf("Remove(missing) message = %v, want the historic text", missing)
+	}
+
+	if err := reg.Remove("custom"); err != nil {
+		t.Fatalf("Remove(custom): %v", err)
+	}
+	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {
+		t.Fatalf("bucket dir still present (err=%v)", err)
+	}
+	if len(reg.List()) != 0 {
+		t.Fatalf("List() = %d buckets, want 0 after remove", len(reg.List()))
 	}
 }
 

@@ -48,6 +48,7 @@ func jsonErrorInfo(err error) (code, hint string) {
 	}
 	var suggest *apperr.ManifestSuggest
 	var bucketMissing *apperr.BucketNotInstalled
+	var bucketNotFound *apperr.BucketNotFound
 	switch {
 	case errors.As(err, &suggest), errors.Is(err, apperr.ErrManifestNotFound):
 		code = "manifest_not_found"
@@ -58,6 +59,9 @@ func jsonErrorInfo(err error) (code, hint string) {
 		code = "manifest_ambiguous"
 	case errors.As(err, &bucketMissing), errors.Is(err, apperr.ErrBucketNotInstalled):
 		code = "bucket_not_installed"
+	case errors.As(err, &bucketNotFound), errors.Is(err, apperr.ErrBucketNotFound):
+		code = "bucket_not_found"
+		hint = "glue bucket list shows installed buckets"
 	case errors.Is(err, apperr.ErrPackageNotInstalled):
 		code = "package_not_installed"
 	case errors.Is(err, errUsage):

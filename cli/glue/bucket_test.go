@@ -262,3 +262,134 @@ func TestRunBucketListJSON_empty(t *testing.T) {
 		t.Fatalf("buckets must be an empty array, not null: %s", out)
 	}
 }
+
+// TestRunBucketRemoveJSON_missingBucket pins the JSON envelope for
+// `glue bucket remove` on a bucket that is not installed: stable code
+// (bucket_not_found), ok=false and exit 1 — stdout carries only JSON.
+func TestRunBucketRemoveJSON_missingBucket(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+
+	out := captureStdout(t, func() {
+		err := bucketRemoveCmd.RunE(bucketRemoveCmd, []string{"no-such-bucket"})
+		if err == nil {
+			t.Fatal("expected failure for a missing bucket")
+		}
+		if code := exitCode(err); code != 1 {
+			t.Fatalf("exitCode = %d, want 1", code)
+		}
+	})
+
+	var res struct {
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+		Results []struct {
+			Ref   string `json:"ref"`
+			Error string `json:"error"`
+			Code  string `json:"code"`
+			Hint  string `json:"hint"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if res.Command != "bucket_remove" || res.OK {
+		t.Fatalf("command/ok = %q/%v, want bucket_remove/false\n%s", res.Command, res.OK, out)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("results = %+v, want exactly one entry\n%s", res.Results, out)
+	}
+	item := res.Results[0]
+	if item.Ref != "no-such-bucket" || item.Code != "bucket_not_found" || item.Error == "" || item.Hint == "" {
+		t.Fatalf("result item = %+v, want ref/code/error/hint set\n%s", item, out)
+	}
+}
+
+// TestRunBucketRemoveJSON_success removes a locally registered (non-git) bucket
+// directory: ok=true, one success item, exit 0, directory gone.
+func TestRunBucketRemoveJSON_success(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+
+	bucketDir := filepath.Join(root, "buckets", "demo")
+	if err := os.MkdirAll(filepath.Join(bucketDir, "bucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := bucketRemoveCmd.RunE(bucketRemoveCmd, []string{"demo"}); err != nil {
+			t.Fatalf("bucket remove: %v", err)
+		}
+	})
+
+	var res struct {
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+		Results []struct {
+			Ref   string `json:"ref"`
+			Error string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if res.Command != "bucket_remove" || !res.OK || len(res.Results) != 1 {
+		t.Fatalf("remove result = %+v\n%s", res, out)
+	}
+	if res.Results[0].Ref != "demo" || res.Results[0].Error != "" {
+		t.Fatalf("result item = %+v, want ref=demo without error\n%s", res.Results[0], out)
+	}
+	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {
+		t.Fatalf("bucket dir still present after remove (err=%v)", err)
+	}
+}
+
+// TestRunBucketRemoveJSON_partialFailure mixes a removable bucket with a missing
+// one: ok=false (exit 1) while the removable bucket still goes away.
+func TestRunBucketRemoveJSON_partialFailure(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+
+	bucketDir := filepath.Join(root, "buckets", "demo")
+	if err := os.MkdirAll(filepath.Join(bucketDir, "bucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		err := bucketRemoveCmd.RunE(bucketRemoveCmd, []string{"demo", "no-such-bucket"})
+		if err == nil {
+			t.Fatal("expected failure when one bucket is missing")
+		}
+		if code := exitCode(err); code != 1 {
+			t.Fatalf("exitCode = %d, want 1", code)
+		}
+	})
+
+	var res struct {
+		OK      bool `json:"ok"`
+		Results []struct {
+			Ref   string `json:"ref"`
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if res.OK || len(res.Results) != 2 {
+		t.Fatalf("ok/results = %v/%+v\n%s", res.OK, res.Results, out)
+	}
+	byRef := map[string]string{}
+	for _, item := range res.Results {
+		byRef[item.Ref] = item.Code
+	}
+	if byRef["demo"] != "" {
+		t.Fatalf("demo must succeed, code = %q\n%s", byRef["demo"], out)
+	}
+	if byRef["no-such-bucket"] != "bucket_not_found" {
+		t.Fatalf("no-such-bucket code = %q, want bucket_not_found\n%s", byRef["no-such-bucket"], out)
+	}
+	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {
+		t.Fatalf("bucket dir still present after remove (err=%v)", err)
+	}
+}

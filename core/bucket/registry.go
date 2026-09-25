@@ -117,7 +117,7 @@ func (r *Registry) Remove(name string) error {
 	defer r.mu.Unlock()
 	bucket, exists := r.buckets[name]
 	if !exists {
-		return fmt.Errorf("bucket not found: %s", name)
+		return &apperr.BucketNotFound{Name: name}
 	}
 
 	if err := os.RemoveAll(bucket.Root); err != nil {
@@ -134,7 +134,7 @@ func (r *Registry) Get(name string) (*Bucket, error) {
 	defer r.mu.RUnlock()
 	bucket, exists := r.buckets[name]
 	if !exists {
-		return nil, fmt.Errorf("bucket not found: %s", name)
+		return nil, &apperr.BucketNotFound{Name: name}
 	}
 	return bucket, nil
 }
@@ -367,7 +367,7 @@ func (r *Registry) FindManifest(pkgRef string) (string, string, *manifest.Manife
 	bucket, exists := r.buckets[bucketName]
 	r.mu.RUnlock()
 	if !exists {
-		return "", "", nil, fmt.Errorf("bucket not found: %s", bucketName)
+		return "", "", nil, &apperr.BucketNotFound{Name: bucketName}
 	}
 
 	searchPaths := manifest.BucketManifestCandidatePaths(bucket.Root, bucketName, pkgName)

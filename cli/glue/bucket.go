@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -139,21 +140,33 @@ var bucketRemoveCmd = &cobra.Command{
 
 		// Initialize git (check/bootstrap) before loading existing buckets
 		if err := br.EnsureGit(); err != nil {
-			fmt.Printf("Warning: git not available: %v\n", err)
+			if jsonOutputEnabled() {
+				// stdout must stay pure JSON; warnings belong on stderr.
+				fmt.Fprintf(os.Stderr, "Warning: git not available: %v\n", err)
+			} else {
+				fmt.Printf("Warning: git not available: %v\n", err)
+			}
 		}
 
 		// Load existing buckets
 		br.ReloadFromDisk()
 
-		var failed []string
 		var removed []string
+		items := make([]jsonResultItem, 0, len(args))
 		for _, name := range args {
-			if err := br.Remove(name); err != nil {
-				fmt.Printf("  %s Failed to remove '%s': %v\n", markFail, name, err)
-				failed = append(failed, name)
-			} else {
+			if rmErr := br.Remove(name); rmErr != nil {
+				item := jsonResultItem{Ref: name, Error: rmErr.Error()}
+				item.Code, item.Hint = jsonErrorInfo(rmErr)
+				items = append(items, item)
+				if !jsonOutputEnabled() {
+					fmt.Printf("  %s Failed to remove '%s': %v\n", markFail, name, rmErr)
+				}
+				continue
+			}
+			items = append(items, jsonResultItem{Ref: name})
+			removed = append(removed, name)
+			if !jsonOutputEnabled() {
 				fmt.Printf("  %s Bucket '%s' removed\n", markSuccess, name)
-				removed = append(removed, name)
 			}
 		}
 
@@ -166,7 +179,13 @@ var bucketRemoveCmd = &cobra.Command{
 			}
 		}
 
-		if len(failed) > 0 {
+		if jsonOutputEnabled() {
+			if err := jsonOperationResult("bucket_remove", items); err != nil {
+				return err
+			}
+		}
+
+		if len(removed) != len(args) {
 			return reportedFail()
 		}
 		return nil

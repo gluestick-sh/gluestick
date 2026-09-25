@@ -14,6 +14,9 @@ var (
 	ErrManifestAmbiguous = errors.New("manifest ambiguous")
 	// ErrBucketNotInstalled is returned when a required bucket is missing locally.
 	ErrBucketNotInstalled = errors.New("bucket not installed")
+	// ErrBucketNotFound is returned when an operation targets a bucket that is
+	// not registered locally (e.g. `glue bucket remove <name>`).
+	ErrBucketNotFound = errors.New("bucket not found")
 	// ErrPackageNotInstalled is returned when an operation targets an uninstalled package.
 	ErrPackageNotInstalled = errors.New("package not installed")
 )
@@ -89,6 +92,24 @@ func (e *BucketNotInstalled) Error() string {
 // Is reports whether target is ErrBucketNotInstalled.
 func (e *BucketNotInstalled) Is(target error) bool {
 	return target == ErrBucketNotInstalled
+}
+
+// BucketNotFound describes an operation on a bucket that is not registered
+// locally. The message keeps the historic "bucket not found: <name>" text so
+// existing human output is unchanged; the type (and sentinel) give machine
+// consumers a stable code.
+type BucketNotFound struct {
+	Name string
+}
+
+// Error implements the error interface.
+func (e *BucketNotFound) Error() string {
+	return fmt.Sprintf("bucket not found: %s", e.Name)
+}
+
+// Is reports whether target is ErrBucketNotFound.
+func (e *BucketNotFound) Is(target error) bool {
+	return target == ErrBucketNotFound
 }
 
 // PackageNotInstalled describes a missing installed package.
