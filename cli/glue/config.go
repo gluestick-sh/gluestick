@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/gluestick-sh/core/bucket"
@@ -39,10 +38,11 @@ var configGetCmd = &cobra.Command{
 		}
 
 		key := args[0]
-		value, set, err := configResolvedValue(cfg, agent, audit, key)
-		if err != nil {
-			return emitConfigError("config_get", key, err)
+		entry := findConfigKey(configKeyTable(cfg, &agent, &audit, root), key)
+		if entry == nil {
+			return emitConfigError("config_get", key, fmt.Errorf("unknown config key: %s", key))
 		}
+		value, set := entry.get()
 
 		if jsonOutputEnabled() {
 			return emitJSON(map[string]any{"command": "config_get", "key": key, "value": value, "set": set})
@@ -68,83 +68,30 @@ var configSetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		agent, err := config.ReadAgent(root)
+		if err != nil {
+			return err
+		}
+		audit, err := config.ReadAudit(root)
+		if err != nil {
+			return err
+		}
 
 		key := args[0]
 		value := args[1]
 
-		if isAgentConfigKey(key) {
-			agent, err := config.ReadAgent(root)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			stored, err := setAgentConfigValue(&agent, key, value)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			if err := config.WriteAgent(root, agent); err != nil {
-				return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
-			}
-			if jsonOutputEnabled() {
-				return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
-			}
-			fmt.Printf("Set %s = %v\n", key, stored)
-			return nil
+		table := configKeyTable(cfg, &agent, &audit, root)
+		entry := findConfigKey(table, key)
+		if entry == nil {
+			return emitConfigError("config_set", key, fmt.Errorf("unknown config key: %s\n\nAvailable keys:%s", key, configAvailableKeys(table)))
 		}
-
-		if isAuditConfigKey(key) {
-			audit, err := config.ReadAudit(root)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			stored, err := setAuditConfigValue(&audit, key, value)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			if err := config.WriteAudit(root, audit); err != nil {
-				return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
-			}
-			if jsonOutputEnabled() {
-				return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
-			}
-			fmt.Printf("Set %s = %v\n", key, stored)
-			return nil
+		stored, err := entry.set(value)
+		if err != nil {
+			return emitConfigError("config_set", key, err)
 		}
-
-		var stored any
-		switch key {
-		case "github_proxy":
-			stored = value
-			cfg.GitHubProxy = value
-		case "verbose":
-			enabled, err := parseConfigBool(value)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			stored = enabled
-			cfg.Verbose = &enabled
-		case "parallel_download":
-			enabled, err := parseConfigBool(value)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			stored = enabled
-			cfg.ParallelDownload = &enabled
-		case "color":
-			enabled, err := parseConfigBool(value)
-			if err != nil {
-				return emitConfigError("config_set", key, err)
-			}
-			stored = enabled
-			cfg.Color = &enabled
-		default:
-			return emitConfigError("config_set", key, fmt.Errorf(
-				"unknown config key: %s\n\nAvailable keys:\n  github_proxy\n  parallel_download\n  color\n  verbose\n  agent.auto_yes\n  agent.policy.mode\n  agent.policy.deny\n  agent.policy.protected\n  audit.max_bytes\n  audit.keep_segments\n  audit.verify_interval_hours", key))
-		}
-
-		if err := saveConfig(root, cfg); err != nil {
+		if err := entry.write(); err != nil {
 			return emitConfigSaveError("config_set", key, fmt.Errorf("save config: %w", err))
 		}
-		applyConfig(cfg)
 
 		if jsonOutputEnabled() {
 			return emitJSON(map[string]any{"command": "config_set", "ok": true, "key": key, "value": stored})
@@ -165,109 +112,35 @@ var configUnsetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		agent, err := config.ReadAgent(root)
+		if err != nil {
+			return err
+		}
+		audit, err := config.ReadAudit(root)
+		if err != nil {
+			return err
+		}
 
 		key := args[0]
 
-		if isAgentConfigKey(key) {
-			agent, err := config.ReadAgent(root)
-			if err != nil {
-				return emitConfigError("config_unset", key, err)
-			}
-			_, wasSet, err := resolveAgentConfigValue(agent, key)
-			if err != nil {
-				return emitConfigError("config_unset", key, err)
-			}
-			if !wasSet {
-				if jsonOutputEnabled() {
-					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
-				}
-				fmt.Printf("%s is not set\n", key)
-				return nil
-			}
-			resetAgentConfigValue(&agent, key)
-			if err := config.WriteAgent(root, agent); err != nil {
-				return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
-			}
-			if jsonOutputEnabled() {
-				return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": true})
-			}
-			fmt.Printf("Unset %s\n", key)
-			return nil
-		}
-
-		if isAuditConfigKey(key) {
-			audit, err := config.ReadAudit(root)
-			if err != nil {
-				return emitConfigError("config_unset", key, err)
-			}
-			_, _, err = resolveAuditConfigValue(audit, key)
-			if err != nil {
-				return emitConfigError("config_unset", key, err)
-			}
-			resetAuditConfigValue(&audit, key)
-			if err := config.WriteAudit(root, audit); err != nil {
-				return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
-			}
-			if jsonOutputEnabled() {
-				return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": true})
-			}
-			fmt.Printf("Unset %s\n", key)
-			return nil
-		}
-
-		var wasSet bool
-		switch key {
-		case "github_proxy":
-			wasSet = cfg.GitHubProxy != ""
-			cfg.GitHubProxy = ""
-			if !wasSet {
-				if jsonOutputEnabled() {
-					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
-				}
-				fmt.Printf("github_proxy is not set\n")
-				return nil
-			}
-		case "verbose":
-			wasSet = cfg.Verbose != nil
-			cfg.Verbose = nil
-			if !wasSet {
-				if jsonOutputEnabled() {
-					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
-				}
-				fmt.Printf("verbose is not set\n")
-				return nil
-			}
-		case "parallel_download":
-			wasSet = cfg.ParallelDownload != nil
-			cfg.ParallelDownload = nil
-			if !wasSet {
-				if jsonOutputEnabled() {
-					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
-				}
-				fmt.Printf("parallel_download is not set\n")
-				return nil
-			}
-		case "color":
-			wasSet = cfg.Color != nil
-			cfg.Color = nil
-			if !wasSet {
-				if jsonOutputEnabled() {
-					return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
-				}
-				fmt.Printf("color is not set\n")
-				return nil
-			}
-		default:
+		entry := findConfigKey(configKeyTable(cfg, &agent, &audit, root), key)
+		if entry == nil {
 			return emitConfigError("config_unset", key, fmt.Errorf("unknown config key: %s", key))
 		}
-
-		if err := saveConfig(root, cfg); err != nil {
+		wasSet := entry.unset()
+		if !wasSet {
+			if jsonOutputEnabled() {
+				return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": false})
+			}
+			fmt.Printf("%s is not set\n", key)
+			return nil
+		}
+		if err := entry.write(); err != nil {
 			return emitConfigSaveError("config_unset", key, fmt.Errorf("save config: %w", err))
 		}
-		applyConfig(cfg)
 
 		if jsonOutputEnabled() {
-			return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": wasSet})
+			return emitJSON(map[string]any{"command": "config_unset", "ok": true, "key": key, "was_set": true})
 		}
 		fmt.Printf("Unset %s\n", key)
 		return nil
@@ -293,45 +166,27 @@ var configListCmd = &cobra.Command{
 			return err
 		}
 
+		table := configKeyTable(cfg, &agent, &audit, root)
+
 		if jsonOutputEnabled() {
-			parallel, parallelSet := configTriBool(cfg.ParallelDownload, true)
-			colorValue, colorSet := configTriBool(cfg.Color, true)
-			verboseValue, verboseSet := configTriBool(cfg.Verbose, false)
-			return emitJSON(map[string]any{
-				"command":                     "config_list",
-				"github_proxy":                cfg.GitHubProxy,
-				"github_proxy_set":            cfg.GitHubProxy != "",
-				"parallel_download":           parallel,
-				"parallel_download_set":       parallelSet,
-				"color":                       colorValue,
-				"color_set":                   colorSet,
-				"verbose":                     verboseValue,
-				"verbose_set":                 verboseSet,
-				"agent_auto_yes":              agent.AutoYes,
-				"agent_policy_mode":           agent.Policy.Mode,
-				"agent_policy_deny":           agent.Policy.Deny,
-				"agent_policy_protected":      agent.Policy.Protected,
-				"audit_max_bytes":             audit.MaxBytes,
-				"audit_keep_segments":         audit.KeepSegments,
-				"audit_verify_interval_hours": audit.VerifyIntervalHours,
-			})
+			payload := map[string]any{"command": "config_list"}
+			for _, k := range table {
+				value, set := k.get()
+				if k.listValue != nil {
+					value = k.listValue()
+				}
+				payload[k.jsonKey] = value
+				if k.emitSet {
+					payload[k.jsonKey+"_set"] = set
+				}
+			}
+			return emitJSON(payload)
 		}
+
 		fmt.Printf("%sConfiguration:%s\n", colorBlue, colorReset)
-		if cfg.GitHubProxy == "" {
-			fmt.Println("  github_proxy = (not set, direct GitHub)")
-		} else {
-			fmt.Printf("  github_proxy = %s\n", cfg.GitHubProxy)
+		for _, k := range table {
+			fmt.Printf("  %s\n", k.text())
 		}
-		fmt.Printf("  parallel_download = %s\n", formatParallelDownload(cfg.ParallelDownload))
-		fmt.Printf("  color = %s\n", formatColor(cfg.Color))
-		fmt.Printf("  verbose = %s\n", formatVerbose(cfg.Verbose))
-		fmt.Printf("  agent.auto_yes = %v\n", agent.AutoYes)
-		fmt.Printf("  agent.policy.mode = %s\n", agent.Policy.Mode)
-		fmt.Printf("  agent.policy.deny = %s\n", strings.Join(agent.Policy.Deny, ","))
-		fmt.Printf("  agent.policy.protected = %s\n", strings.Join(agent.Policy.Protected, ","))
-		fmt.Printf("  audit.max_bytes = %d\n", audit.MaxBytes)
-		fmt.Printf("  audit.keep_segments = %d\n", audit.KeepSegments)
-		fmt.Printf("  audit.verify_interval_hours = %d\n", audit.VerifyIntervalHours)
 
 		return nil
 	},
@@ -367,104 +222,12 @@ func emitConfigError(command, key string, err error) error {
 	return err
 }
 
-// configResolvedValue returns the resolved value and set flag for a config key.
-// Boolean keys resolve to real booleans (defaults applied); github_proxy is a string.
-func configResolvedValue(cfg *config.Basics, agent config.AgentSettings, audit config.AuditSettings, key string) (any, bool, error) {
-	if isAgentConfigKey(key) {
-		return resolveAgentConfigValue(agent, key)
-	}
-	if isAuditConfigKey(key) {
-		return resolveAuditConfigValue(audit, key)
-	}
-	switch key {
-	case "github_proxy":
-		return cfg.GitHubProxy, cfg.GitHubProxy != "", nil
-	case "verbose":
-		v, set := configTriBool(cfg.Verbose, false)
-		return v, set, nil
-	case "parallel_download":
-		v, set := configTriBool(cfg.ParallelDownload, true)
-		return v, set, nil
-	case "color":
-		v, set := configTriBool(cfg.Color, true)
-		return v, set, nil
-	default:
-		return nil, false, fmt.Errorf("unknown config key: %s", key)
-	}
-}
-
 // configTriBool resolves a tri-state bool pointer against its default.
 func configTriBool(v *bool, def bool) (value, set bool) {
 	if v == nil {
 		return def, false
 	}
 	return *v, true
-}
-
-// agentConfigKeys are the config.json agent keys exposed by `glue config`.
-var agentConfigKeys = map[string]bool{
-	"agent.auto_yes":         true,
-	"agent.policy.mode":      true,
-	"agent.policy.deny":      true,
-	"agent.policy.protected": true,
-}
-
-func isAgentConfigKey(key string) bool { return agentConfigKeys[key] }
-
-// resolveAgentConfigValue returns the value and set flag for an agent key.
-func resolveAgentConfigValue(settings config.AgentSettings, key string) (any, bool, error) {
-	switch key {
-	case "agent.auto_yes":
-		return settings.AutoYes, settings.AutoYes, nil
-	case "agent.policy.mode":
-		return settings.Policy.Mode, true, nil
-	case "agent.policy.deny":
-		return strings.Join(settings.Policy.Deny, ","), len(settings.Policy.Deny) > 0, nil
-	case "agent.policy.protected":
-		return strings.Join(settings.Policy.Protected, ","), len(settings.Policy.Protected) > 0, nil
-	}
-	return nil, false, fmt.Errorf("unknown config key: %s", key)
-}
-
-// setAgentConfigValue mutates one agent key from its CLI string form.
-func setAgentConfigValue(settings *config.AgentSettings, key, value string) (any, error) {
-	switch key {
-	case "agent.auto_yes":
-		enabled, err := parseConfigBool(value)
-		if err != nil {
-			return nil, err
-		}
-		settings.AutoYes = enabled
-		return enabled, nil
-	case "agent.policy.mode":
-		mode := strings.ToLower(strings.TrimSpace(value))
-		if mode != config.AgentPolicyModeStrict && mode != config.AgentPolicyModeConfirm && mode != config.AgentPolicyModeAuto {
-			return nil, fmt.Errorf("agent.policy.mode must be strict, confirm or auto")
-		}
-		settings.Policy.Mode = mode
-		return mode, nil
-	case "agent.policy.deny":
-		settings.Policy.Deny = splitConfigList(value)
-		return settings.Policy.Deny, nil
-	case "agent.policy.protected":
-		settings.Policy.Protected = splitConfigList(value)
-		return settings.Policy.Protected, nil
-	}
-	return nil, fmt.Errorf("unknown config key: %s", key)
-}
-
-// resetAgentConfigValue restores one agent key to its safe default.
-func resetAgentConfigValue(settings *config.AgentSettings, key string) {
-	switch key {
-	case "agent.auto_yes":
-		settings.AutoYes = false
-	case "agent.policy.mode":
-		settings.Policy.Mode = config.AgentPolicyModeConfirm
-	case "agent.policy.deny":
-		settings.Policy.Deny = []string{}
-	case "agent.policy.protected":
-		settings.Policy.Protected = []string{}
-	}
 }
 
 func splitConfigList(value string) []string {
@@ -475,88 +238,6 @@ func splitConfigList(value string) []string {
 		}
 	}
 	return out
-}
-
-// auditConfigKeys are the config.json audit keys exposed by `glue config`.
-// Both keys report as "set" because the reader always resolves defaults.
-var auditConfigKeys = map[string]bool{
-	"audit.max_bytes":             true,
-	"audit.keep_segments":         true,
-	"audit.verify_interval_hours": true,
-}
-
-func isAuditConfigKey(key string) bool { return auditConfigKeys[key] }
-
-// resolveAuditConfigValue returns the value and set flag for an audit key.
-func resolveAuditConfigValue(settings config.AuditSettings, key string) (any, bool, error) {
-	switch key {
-	case "audit.max_bytes":
-		return settings.MaxBytes, true, nil
-	case "audit.keep_segments":
-		return settings.KeepSegments, true, nil
-	case "audit.verify_interval_hours":
-		return settings.VerifyIntervalHours, true, nil
-	}
-	return nil, false, fmt.Errorf("unknown config key: %s", key)
-}
-
-// setAuditConfigValue mutates one audit key from its CLI string form. Because a
-// leading "-" would be parsed as a flag by cobra, the negative sentinels are
-// also reachable as keywords: `off` (disable rotation) and `all` (keep every
-// segment). Literal negatives still work after a `--` separator.
-func setAuditConfigValue(settings *config.AuditSettings, key, value string) (any, error) {
-	raw := strings.ToLower(strings.TrimSpace(value))
-	switch key {
-	case "audit.max_bytes":
-		if raw == "off" || raw == "none" || raw == "disabled" {
-			settings.MaxBytes = config.AuditRotationDisabled
-			return settings.MaxBytes, nil
-		}
-		maxBytes, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("audit.max_bytes must be a whole number of bytes, or off to disable rotation")
-		}
-		settings.MaxBytes = maxBytes
-		return config.NormalizeAuditSettings(*settings).MaxBytes, nil
-	case "audit.keep_segments":
-		if raw == "all" || raw == "unlimited" {
-			settings.KeepSegments = config.AuditKeepAllSegments
-			return settings.KeepSegments, nil
-		}
-		keep, err := strconv.Atoi(raw)
-		if err != nil {
-			return nil, fmt.Errorf("audit.keep_segments must be a whole number, or all to keep every segment")
-		}
-		if keep > config.MaxAuditKeepSegments {
-			return nil, fmt.Errorf("audit.keep_segments must be <= %d", config.MaxAuditKeepSegments)
-		}
-		settings.KeepSegments = keep
-		return config.NormalizeAuditSettings(*settings).KeepSegments, nil
-	case "audit.verify_interval_hours":
-		if raw == "off" || raw == "never" || raw == "disabled" {
-			settings.VerifyIntervalHours = config.AuditVerifyDisabled
-			return settings.VerifyIntervalHours, nil
-		}
-		hours, err := strconv.Atoi(raw)
-		if err != nil {
-			return nil, fmt.Errorf("audit.verify_interval_hours must be a whole number of hours, or off to disable the scheduled verification")
-		}
-		settings.VerifyIntervalHours = hours
-		return config.NormalizeAuditSettings(*settings).VerifyIntervalHours, nil
-	}
-	return nil, fmt.Errorf("unknown config key: %s", key)
-}
-
-// resetAuditConfigValue restores one audit key to its built-in default.
-func resetAuditConfigValue(settings *config.AuditSettings, key string) {
-	switch key {
-	case "audit.max_bytes":
-		settings.MaxBytes = config.DefaultAuditMaxBytes
-	case "audit.keep_segments":
-		settings.KeepSegments = config.DefaultAuditKeepSegments
-	case "audit.verify_interval_hours":
-		settings.VerifyIntervalHours = config.DefaultAuditVerifyIntervalHours
-	}
 }
 
 // formatConfigValue renders a resolved config value for text mode.
