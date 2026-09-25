@@ -479,13 +479,15 @@ func TestMCPBucketRemove_confirmExecutes(t *testing.T) {
 	var done struct {
 		Command string `json:"command"`
 		OK      bool   `json:"ok"`
-		Name    string `json:"name"`
+		Results []struct {
+			Ref string `json:"ref"`
+		} `json:"results"`
 	}
 	if err := decodeMCPStructured(res, &done); err != nil {
 		t.Fatalf("confirm payload: %v", err)
 	}
-	if done.Command != "bucket_remove" || !done.OK || done.Name != "demo" {
-		t.Fatalf("confirm payload = %+v, want bucket_remove ok for demo", done)
+	if done.Command != "bucket_remove" || !done.OK || len(done.Results) != 1 || done.Results[0].Ref != "demo" {
+		t.Fatalf("confirm payload = %+v, want bucket_remove ok with results[0].ref=demo", done)
 	}
 	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {
 		t.Fatalf("bucket dir still present after confirm (err=%v)", err)

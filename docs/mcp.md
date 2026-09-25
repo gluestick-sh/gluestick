@@ -205,9 +205,10 @@ environment, install git, and verify PATH"*. What to look for:
 | `glue_path_check` | read | `{in_path, bin_dir, store_alias_shadowing, ok}` |
 | `glue_bucket_list` | read | `{buckets, count}` |
 | `glue_doctor` | read | same report as `glue doctor --json` |
-| `glue_install` / `glue_uninstall` / `glue_update` | write | confirm token unless `agent.auto_yes` |
+| `glue_install` / `glue_uninstall` | write | confirm token unless `agent.auto_yes`; success → `{command, ok, results[]}` (CLI envelope) |
+| `glue_update` | write | confirm token unless `agent.auto_yes`; success → `{command, ok, updated[], count}` |
 | `glue_bucket_add` / `glue_bucket_update` | write | confirm token unless `agent.auto_yes` |
-| `glue_bucket_remove` | write (destructive) | deletes the local bucket checkout; confirm token unless `agent.auto_yes`, blockable via `deny`/`protected` |
+| `glue_bucket_remove` | write (destructive) | deletes the local bucket checkout; confirm token unless `agent.auto_yes`, blockable via `deny`/`protected`; success → `{command, ok, results[]}` |
 | `glue_confirm` | write | executes a pending token (single use, 5 minutes) |
 
 `glue_bucket_remove` example flow: call it, then confirm the returned token
@@ -216,7 +217,7 @@ environment, install git, and verify PATH"*. What to look for:
 
 ```
 tools/call glue_bucket_remove {"name":"demo"} → {"status":"pending","confirm_token":"…","action":"bucket_remove"}
-tools/call glue_confirm       {"token":"…"}   → {"command":"bucket_remove","name":"demo","ok":true}
+tools/call glue_confirm       {"token":"…"}   → {"command":"bucket_remove","ok":true,"results":[{"ref":"demo"}]}
 ```
 
 Every tool call emits one `[glue mcp] tool=<name> status=<ok|error>` line on

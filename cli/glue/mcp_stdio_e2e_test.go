@@ -175,12 +175,14 @@ func TestMCPStdio_clientFlow(t *testing.T) {
 	var donePayload struct {
 		Command string `json:"command"`
 		OK      bool   `json:"ok"`
-		Name    string `json:"name"`
+		Results []struct {
+			Ref string `json:"ref"`
+		} `json:"results"`
 	}
 	if err := decodeMCPStructured(done, &donePayload); err != nil {
 		t.Fatalf("confirm payload: %v", err)
 	}
-	if donePayload.Command != "bucket_remove" || !donePayload.OK || donePayload.Name != "demo" {
+	if donePayload.Command != "bucket_remove" || !donePayload.OK || len(donePayload.Results) != 1 || donePayload.Results[0].Ref != "demo" {
 		t.Fatalf("confirm payload = %+v", donePayload)
 	}
 	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {

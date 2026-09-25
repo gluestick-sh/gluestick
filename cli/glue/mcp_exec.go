@@ -135,7 +135,7 @@ func executeMCPBucketRemove(ctx context.Context, eng *engine.Engine, root, name 
 		eng.RemoveSearchIndexBucket(name)
 	}
 	recordMCPBucketActivity(ctx, eng, "bucket_remove", name)
-	return map[string]any{"command": "bucket_remove", "ok": true, "name": name}, nil
+	return jsonCommandResult{Command: "bucket_remove", OK: true, Results: []jsonResultItem{{Ref: name}}}, nil
 }
 
 // recordMCPBucketActivity writes the completion row for an MCP bucket
@@ -158,7 +158,7 @@ func executeMCPInstall(ctx context.Context, eng *engine.Engine, pkg string, forc
 	if failErr := installFailureError(err, result); failErr != nil {
 		return nil, failErr
 	}
-	return map[string]any{"command": "install", "ok": true, "result": result}, nil
+	return jsonCommandResult{Command: "install", OK: true, Results: []jsonResultItem{jsonResultItemFromInstall(pkg, result, nil)}}, nil
 }
 
 func executeMCPUninstall(ctx context.Context, eng *engine.Engine, pkg string, purge bool) (any, error) {
@@ -169,5 +169,5 @@ func executeMCPUninstall(ctx context.Context, eng *engine.Engine, pkg string, pu
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"command": "uninstall", "ok": true, "result": result}, nil
+	return jsonCommandResult{Command: "uninstall", OK: true, Results: []jsonResultItem{jsonResultItemFromInstall(pkg, result, nil)}}, nil
 }
