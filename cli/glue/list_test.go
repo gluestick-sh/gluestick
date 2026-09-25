@@ -2,6 +2,8 @@
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,5 +80,71 @@ func TestRunListAllVersions_countsPackagesNotVersions(t *testing.T) {
 
 	if !strings.Contains(out, "2 packages installed") {
 		t.Fatalf("expected package count 2 (not versions or empty dirs), got:\n%s", out)
+	}
+}
+
+// TestRunListJSON_emptyPackagesIsArray pins the JSON contract for an empty
+// install: `packages` must be [] rather than null, so agents can iterate it
+// without a nil check (all other commands already emit []).
+func TestRunListJSON_emptyPackagesIsArray(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+	listCmd.SetContext(context.Background())
+	t.Cleanup(func() { listCmd.SetContext(nil) })
+
+	out := captureStdout(t, func() {
+		if err := runList(listCmd, nil); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+	})
+
+	var res struct {
+		Packages []json.RawMessage `json:"packages"`
+		Count    int               `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if res.Count != 0 {
+		t.Fatalf("count = %d, want 0", res.Count)
+	}
+	if res.Packages == nil {
+		t.Fatalf("packages must be an empty array, not null: %s", out)
+	}
+	if len(res.Packages) != 0 {
+		t.Fatalf("packages = %s, want []", out)
+	}
+}
+
+// TestRunListAllJSON_emptyPackagesIsArray is the `list --all` counterpart.
+func TestRunListAllJSON_emptyPackagesIsArray(t *testing.T) {
+	root := t.TempDir()
+	setJSONTestFlags(t, root)
+	listCmd.SetContext(context.Background())
+	t.Cleanup(func() { listCmd.SetContext(nil) })
+
+	oldAll := listAll
+	listAll = true
+	t.Cleanup(func() { listAll = oldAll })
+
+	out := captureStdout(t, func() {
+		if err := runList(listCmd, nil); err != nil {
+			t.Fatalf("list --all: %v", err)
+		}
+	})
+
+	var res struct {
+		Packages    []json.RawMessage `json:"packages"`
+		Count       int               `json:"count"`
+		AllVersions bool              `json:"allVersions"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if !res.AllVersions || res.Count != 0 {
+		t.Fatalf("allVersions/count = %v/%d, want true/0\n%s", res.AllVersions, res.Count, out)
+	}
+	if res.Packages == nil || len(res.Packages) != 0 {
+		t.Fatalf("packages must be an empty array, not null: %s", out)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gluestick-sh/core/bucket"
@@ -54,7 +55,7 @@ func executeMCPUpdate(ctx context.Context, eng *engine.Engine, pkg string, all b
 }
 
 // executeMCPBucketAdd clones a bucket (known name or explicit URL) and indexes it.
-func executeMCPBucketAdd(_ context.Context, eng *engine.Engine, root, name, repoURL string) (any, error) {
+func executeMCPBucketAdd(ctx context.Context, eng *engine.Engine, root, name, repoURL string) (any, error) {
 	br, err := bucket.NewRegistry(root)
 	if err != nil {
 		return nil, fmt.Errorf("bucket registry: %w", err)
@@ -82,11 +83,12 @@ func executeMCPBucketAdd(_ context.Context, eng *engine.Engine, root, name, repo
 	if eng != nil {
 		eng.LoadSearchIndexBucket(b.Name)
 	}
+	recordMCPBucketActivity(ctx, eng, "bucket_add", b.Name)
 	return map[string]any{"command": "bucket_add", "ok": true, "name": b.Name, "repo_url": b.RepoURL}, nil
 }
 
 // executeMCPBucketUpdate pulls one bucket (or all when name is empty).
-func executeMCPBucketUpdate(_ context.Context, eng *engine.Engine, root, name string) (any, error) {
+func executeMCPBucketUpdate(ctx context.Context, eng *engine.Engine, root, name string) (any, error) {
 	br, err := bucket.NewRegistry(root)
 	if err != nil {
 		return nil, fmt.Errorf("bucket registry: %w", err)
@@ -105,7 +107,48 @@ func executeMCPBucketUpdate(_ context.Context, eng *engine.Engine, root, name st
 	if eng != nil {
 		eng.ReloadBuckets(true)
 	}
+	label := name
+	if label == "" {
+		label = "*" // all buckets, matching the CLI's activity label
+	}
+	recordMCPBucketActivity(ctx, eng, "bucket_update", label)
 	return map[string]any{"command": "bucket_update", "ok": true, "updated": names}, nil
+}
+
+// executeMCPBucketRemove deletes a bucket checkout and drops it from the search
+// index. The audit row carries the MCP source/actor from ctx, so the trail says
+// which agent removed which bucket.
+func executeMCPBucketRemove(ctx context.Context, eng *engine.Engine, root, name string) (any, error) {
+	br, err := bucket.NewRegistry(root)
+	if err != nil {
+		return nil, fmt.Errorf("bucket registry: %w", err)
+	}
+	if err := br.EnsureGit(); err != nil {
+		return nil, fmt.Errorf("git not available: %w", err)
+	}
+	br.ReloadFromDisk()
+	if err := br.Remove(name); err != nil {
+		code, hint := jsonErrorInfo(err)
+		return nil, &mcpToolError{Code: code, Message: err.Error(), Hint: hint}
+	}
+	if eng != nil {
+		eng.RemoveSearchIndexBucket(name)
+	}
+	recordMCPBucketActivity(ctx, eng, "bucket_remove", name)
+	return map[string]any{"command": "bucket_remove", "ok": true, "name": name}, nil
+}
+
+// recordMCPBucketActivity writes the completion row for an MCP bucket
+// operation. The CLI reaches the same operations through
+// syncEngineBucketsAfter*, which has no context to carry source/actor; MCP
+// passes the request context so the row reads source=mcp + client actor.
+func recordMCPBucketActivity(ctx context.Context, eng *engine.Engine, op, label string) {
+	if eng == nil {
+		return
+	}
+	if err := eng.RecordAudit(ctx, op, label, "", "success", map[string]any{}); err != nil {
+		fmt.Fprintf(os.Stderr, "[glue mcp] audit warning: %v\n", err)
+	}
 }
 
 func executeMCPInstall(ctx context.Context, eng *engine.Engine, pkg string, force bool) (any, error) {

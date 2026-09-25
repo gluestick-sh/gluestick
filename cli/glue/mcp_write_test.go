@@ -56,6 +56,26 @@ func TestDecideMCPPolicy(t *testing.T) {
 	if d := decideMCPPolicy(protected, "install", "nodejs"); !d.Allowed {
 		t.Fatalf("protected install: %+v, want allowed", d)
 	}
+
+	// A protected bucket cannot be removed by an agent, even with auto_yes.
+	protectedBucket := defaults
+	protectedBucket.Policy.Protected = []string{"main"}
+	if d := decideMCPPolicy(protectedBucket, "bucket_remove", "main"); d.Allowed || d.Code != "denied_by_policy" {
+		t.Fatalf("protected bucket_remove: %+v, want denied_by_policy", d)
+	}
+	if d := decideMCPPolicy(protectedBucket, "bucket_add", "main"); !d.Allowed {
+		t.Fatalf("protected bucket_add: %+v, want allowed", d)
+	}
+	protectedBucket.AutoYes = true
+	if d := decideMCPPolicy(protectedBucket, "bucket_remove", "main"); d.Allowed {
+		t.Fatalf("protected bucket_remove + auto_yes: %+v, want still denied", d)
+	}
+
+	deniedRemove := defaults
+	deniedRemove.Policy.Deny = []string{"bucket_remove"}
+	if d := decideMCPPolicy(deniedRemove, "bucket_remove", "demo"); d.Allowed || d.Code != "denied_by_policy" {
+		t.Fatalf("deny bucket_remove: %+v, want denied_by_policy", d)
+	}
 }
 
 // TestMCPInstallPending verifies the default flow never installs immediately:
@@ -225,6 +245,7 @@ func TestMCPWriteTools_listed(t *testing.T) {
 		"glue_update":        false,
 		"glue_bucket_add":    false,
 		"glue_bucket_update": false,
+		"glue_bucket_remove": false,
 		"glue_confirm":       false,
 	}
 	for _, tool := range res.Tools {
@@ -343,6 +364,7 @@ func TestMCPNewWriteToolsPending(t *testing.T) {
 		{"glue_update", map[string]any{"package": "nodejs"}},
 		{"glue_bucket_add", map[string]any{"name": "main"}},
 		{"glue_bucket_update", map[string]any{}},
+		{"glue_bucket_remove", map[string]any{"name": "main"}},
 	}
 	for _, tc := range cases {
 		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
@@ -404,5 +426,120 @@ func TestMCPHoldBlocksUninstall(t *testing.T) {
 	_, err := runMCPUninstallCall(context.Background(), &engine.Engine{}, t.TempDir(), mcpUninstallInput{Package: "nodejs"})
 	if err == nil || !strings.Contains(err.Error(), "held") {
 		t.Fatalf("held package must be blocked, got err=%v", err)
+	}
+}
+
+// TestMCPBucketRemove_confirmExecutes drives the destructive bucket flow end to
+// end: the tool only issues a token, glue_confirm deletes the local checkout,
+// and the audit trail carries source=mcp with the client actor.
+func TestMCPBucketRemove_confirmExecutes(t *testing.T) {
+	root := t.TempDir()
+	bucketDir := filepath.Join(root, "buckets", "demo")
+	if err := os.MkdirAll(filepath.Join(bucketDir, "bucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	session := newMCPTestSessionAt(t, root)
+	ctx := context.Background()
+
+	pending, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "glue_bucket_remove",
+		Arguments: map[string]any{"name": "demo"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(glue_bucket_remove): %v", err)
+	}
+	if pending.IsError {
+		t.Fatalf("bucket_remove must be pending first: %s", mcpContentText(pending))
+	}
+	var payload struct {
+		Status       string `json:"status"`
+		ConfirmToken string `json:"confirm_token"`
+		Action       string `json:"action"`
+	}
+	if err := decodeMCPStructured(pending, &payload); err != nil {
+		t.Fatalf("pending payload: %v", err)
+	}
+	if payload.Status != "pending" || payload.ConfirmToken == "" || payload.Action != "bucket_remove" {
+		t.Fatalf("pending payload = %+v", payload)
+	}
+	if _, err := os.Stat(bucketDir); err != nil {
+		t.Fatalf("bucket must still exist before confirmation: %v", err)
+	}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "glue_confirm",
+		Arguments: map[string]any{"token": payload.ConfirmToken},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(glue_confirm): %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("confirm must remove the bucket: %s", mcpContentText(res))
+	}
+	var done struct {
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+		Name    string `json:"name"`
+	}
+	if err := decodeMCPStructured(res, &done); err != nil {
+		t.Fatalf("confirm payload: %v", err)
+	}
+	if done.Command != "bucket_remove" || !done.OK || done.Name != "demo" {
+		t.Fatalf("confirm payload = %+v, want bucket_remove ok for demo", done)
+	}
+	if _, err := os.Stat(bucketDir); !os.IsNotExist(err) {
+		t.Fatalf("bucket dir still present after confirm (err=%v)", err)
+	}
+
+	eng, err := engine.NewEngine(&engine.EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer eng.Close()
+	entries, err := eng.QueryAuditLog("mcp", "demo", "", 10)
+	if err != nil {
+		t.Fatalf("QueryAuditLog: %v", err)
+	}
+	var completion map[string]any
+	for _, entry := range entries {
+		if entry["operation"] == "bucket_remove" && entry["status"] == "success" {
+			completion = entry
+			break
+		}
+	}
+	if completion == nil {
+		t.Fatalf("no bucket_remove success audit row: %+v", entries)
+	}
+	if completion["actor"] != "glue-test/0.0.0" {
+		t.Fatalf("audit actor = %v, want glue-test/0.0.0", completion["actor"])
+	}
+}
+
+// TestMCPBucketRemove_deniedByPolicy verifies agent.policy.deny hard-blocks the
+// destructive tool even with auto_yes: no token is issued and the bucket stays.
+func TestMCPBucketRemove_deniedByPolicy(t *testing.T) {
+	root := t.TempDir()
+	bucketDir := filepath.Join(root, "buckets", "demo")
+	if err := os.MkdirAll(filepath.Join(bucketDir, "bucket"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeMCPAgentConfig(t, root, `{"agent":{"auto_yes":true,"policy":{"deny":["bucket_remove"]}}}`)
+	session := newMCPTestSessionAt(t, root)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "glue_bucket_remove",
+		Arguments: map[string]any{"name": "demo"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(glue_bucket_remove): %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("deny must block bucket_remove: %s", mcpContentText(res))
+	}
+	if text := mcpContentText(res); !strings.Contains(text, "denied_by_policy") {
+		t.Fatalf("error payload = %s, want denied_by_policy", text)
+	}
+	if _, err := os.Stat(bucketDir); err != nil {
+		t.Fatalf("denied removal must leave the bucket on disk: %v", err)
 	}
 }

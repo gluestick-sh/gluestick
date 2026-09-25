@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"testing"
 
 	"github.com/gluestick-sh/core/engine"
@@ -18,6 +21,39 @@ func TestMCPCommand_registered(t *testing.T) {
 	}
 	if cmd != mcpCmd {
 		t.Fatalf("Find(mcp) = %q, want mcpCmd", cmd.Name())
+	}
+}
+
+// TestIsMCPShutdown pins the normal-shutdown classification: a client closing
+// stdin (which the SDK reports as "server is closing: EOF") must exit 0, while a
+// real startup/operation failure must still fail.
+func TestIsMCPShutdown(t *testing.T) {
+	shutdown := []error{
+		nil,
+		io.EOF,
+		context.Canceled,
+		context.DeadlineExceeded,
+		mcp.ErrConnectionClosed,
+		fmt.Errorf("connect: %w", io.EOF),
+		errors.New("server is closing: EOF"),
+		errors.New("client is closing"),
+		errors.New("connection closed"),
+	}
+	for _, err := range shutdown {
+		if !isMCPShutdown(err) {
+			t.Errorf("isMCPShutdown(%v) = false, want true", err)
+		}
+	}
+
+	failures := []error{
+		errors.New("initialize engine: open C:\\x: access denied"),
+		errors.New("tool glue_install: download failed"),
+		errors.New("server connect failed"),
+	}
+	for _, err := range failures {
+		if isMCPShutdown(err) {
+			t.Errorf("isMCPShutdown(%v) = true, want false", err)
+		}
 	}
 }
 
@@ -95,13 +131,17 @@ func TestMCPCall_listEmpty(t *testing.T) {
 		t.Fatalf("glue_list returned a tool error: %s", mcpContentText(res))
 	}
 	var payload struct {
-		Count int `json:"count"`
+		Packages []json.RawMessage `json:"packages"`
+		Count    int               `json:"count"`
 	}
 	if err := decodeMCPStructured(res, &payload); err != nil {
 		t.Fatalf("structuredContent is not the list payload: %v", err)
 	}
 	if payload.Count != 0 {
 		t.Fatalf("count = %d, want 0 on a fresh data root", payload.Count)
+	}
+	if payload.Packages == nil {
+		t.Fatalf("packages must be an empty array, not null: %s", mcpContentText(res))
 	}
 }
 

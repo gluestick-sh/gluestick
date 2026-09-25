@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gluestick-sh/cli/version"
@@ -51,12 +52,30 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 	}
 	defer eng.Close()
 
-	// A client closing stdin is a normal shutdown, not an operation failure.
 	err = newGlueMCPServer(eng, root).Run(cmd.Context(), &mcp.StdioTransport{})
-	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, mcp.ErrConnectionClosed) {
+	if isMCPShutdown(err) {
+		// A client closing stdin is a normal shutdown, not an operation failure.
 		return nil
 	}
 	return err
+}
+
+// isMCPShutdown reports whether an MCP server error is just the client going
+// away. The SDK surfaces that as the exported ErrConnectionClosed or as one of
+// its internal jsonrpc2 errors ("server is closing" / "client is closing",
+// carrying the underlying EOF), so the message is matched too — an agent
+// closing stdin must not turn into exit code 1.
+func isMCPShutdown(err error) bool {
+	switch {
+	case err == nil,
+		errors.Is(err, io.EOF),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, mcp.ErrConnectionClosed):
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "is closing") || strings.Contains(msg, "connection closed")
 }
 
 // newGlueMCPServer builds the server and registers the read tools. A fresh
@@ -212,6 +231,10 @@ func runMCPList(ctx context.Context, eng *engine.Engine, in mcpListInput) (any, 
 		return nil, fmt.Errorf("list: %w", err)
 	}
 	sort.Slice(packages, func(i, j int) bool { return packages[i].Name < packages[j].Name })
+	if packages == nil {
+		// JSON stability: an empty install reports [] rather than null.
+		packages = []*engine.Package{}
+	}
 	return map[string]any{
 		"packages": packages,
 		"count":    len(packages),

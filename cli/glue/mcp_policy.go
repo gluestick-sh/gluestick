@@ -46,6 +46,22 @@ type mcpPolicyDecision struct {
 	Hint    string
 }
 
+// mcpProtectedOps are the destructive operations whose target name is checked
+// against agent.policy.protected: packages for uninstall, buckets for
+// bucket_remove.
+var mcpProtectedOps = map[string]bool{
+	"uninstall":     true,
+	"bucket_remove": true,
+}
+
+// mcpProtectedNoun names the protected target in the denial message.
+func mcpProtectedNoun(op string) string {
+	if op == "bucket_remove" {
+		return "bucket"
+	}
+	return "package"
+}
+
 // decideMCPPolicy applies the deny list and protected packages first, then
 // decides whether a confirm token is required.
 func decideMCPPolicy(settings config.AgentSettings, op, pkg string) mcpPolicyDecision {
@@ -56,10 +72,10 @@ func decideMCPPolicy(settings config.AgentSettings, op, pkg string) mcpPolicyDec
 			Hint:    "edit the agent.policy section in config.json to allow it",
 		}
 	}
-	if op == "uninstall" && containsFold(settings.Policy.Protected, packageBaseName(pkg)) {
+	if mcpProtectedOps[op] && containsFold(settings.Policy.Protected, packageBaseName(pkg)) {
 		return mcpPolicyDecision{
 			Code:    "denied_by_policy",
-			Message: fmt.Sprintf("package %q is protected by agent.policy.protected", packageBaseName(pkg)),
+			Message: fmt.Sprintf("%s %q is protected by agent.policy.protected", mcpProtectedNoun(op), packageBaseName(pkg)),
 			Hint:    "remove it from agent.policy.protected (the human CLI is unaffected)",
 		}
 	}

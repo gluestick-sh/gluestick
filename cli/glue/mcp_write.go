@@ -38,6 +38,10 @@ type mcpBucketUpdateInput struct {
 	Name string `json:"name,omitempty" jsonschema:"bucket to update; omit to update all buckets"`
 }
 
+type mcpBucketRemoveInput struct {
+	Name string `json:"name" jsonschema:"bucket to remove (destructive: deletes the local bucket checkout)"`
+}
+
 // registerGlueWriteTools adds the write tools plus the confirmation endpoint.
 func registerGlueWriteTools(server *mcp.Server, eng *engine.Engine, root string) {
 	addGlueWriteTool(server, eng, &mcp.Tool{
@@ -85,6 +89,14 @@ func registerGlueWriteTools(server *mcp.Server, eng *engine.Engine, root string)
 		Description: "Update one bucket or all buckets. Returns a confirm token unless agent.auto_yes is enabled.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in mcpBucketUpdateInput) (*mcp.CallToolResult, any, error) {
 		out, err := runMCPBucketUpdateCall(mcpAuditContext(ctx, req), eng, root, in)
+		return nil, out, err
+	})
+
+	addGlueWriteTool(server, eng, &mcp.Tool{
+		Name:        "glue_bucket_remove",
+		Description: "Remove an installed bucket and its local checkout (destructive). Returns a confirm token unless agent.auto_yes is enabled.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in mcpBucketRemoveInput) (*mcp.CallToolResult, any, error) {
+		out, err := runMCPBucketRemoveCall(mcpAuditContext(ctx, req), eng, root, in)
 		return nil, out, err
 	})
 }
@@ -186,6 +198,8 @@ func runMCPConfirm(ctx context.Context, eng *engine.Engine, root, token string) 
 		return executeMCPBucketAdd(ctx, eng, root, action.Package, action.Arg)
 	case "bucket_update":
 		return executeMCPBucketUpdate(ctx, eng, root, action.Package)
+	case "bucket_remove":
+		return executeMCPBucketRemove(ctx, eng, root, action.Package)
 	}
 	return nil, &mcpToolError{
 		Code:    "invalid_confirm_token",
@@ -266,4 +280,32 @@ func runMCPBucketUpdateCall(ctx context.Context, eng *engine.Engine, root string
 		return nil, err
 	}
 	return mcpPendingPayload("bucket_update", name, token, expiresIn), nil
+}
+
+// runMCPBucketRemoveCall gates bucket deletion. It is the destructive
+// counterpart of runMCPBucketAddCall: deny/protected (bucket name) apply, then
+// the confirm token unless agent.auto_yes is set.
+func runMCPBucketRemoveCall(ctx context.Context, eng *engine.Engine, root string, in mcpBucketRemoveInput) (any, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return nil, &mcpToolError{Code: "invalid_request", Message: "name is required"}
+	}
+	decision, err := mcpEvaluate(root, "bucket_remove", name)
+	if err != nil {
+		return nil, err
+	}
+	if !decision.Allowed {
+		mcpRecordDecision(ctx, eng, "bucket_remove", name, "denied", map[string]any{"phase": "denied", "reason": decision.Code})
+		return nil, &mcpToolError{Code: decision.Code, Message: decision.Message, Hint: decision.Hint}
+	}
+	if !decision.Confirm {
+		mcpRecordDecision(ctx, eng, "bucket_remove", name, "granted", map[string]any{"phase": "granted", "mode": "auto"})
+		return executeMCPBucketRemove(ctx, eng, root, name)
+	}
+	mcpRecordDecision(ctx, eng, "bucket_remove", name, "pending", map[string]any{"phase": "confirm_required", "action": "bucket_remove"})
+	token, expiresIn, err := mcpIssueConfirm(root, "bucket_remove", name, false, "")
+	if err != nil {
+		return nil, err
+	}
+	return mcpPendingPayload("bucket_remove", name, token, expiresIn), nil
 }

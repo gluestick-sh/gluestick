@@ -64,6 +64,10 @@ func runList(cmd *cobra.Command, args []string) error {
 	})
 
 	if jsonOutputEnabled() {
+		if packages == nil {
+			// JSON stability: an empty install reports [] rather than null.
+			packages = []*engine.Package{}
+		}
 		return emitJSON(map[string]any{"packages": packages, "count": len(packages)})
 	}
 
@@ -113,6 +117,10 @@ func runListAllVersions(root string, args []string) error {
 	}
 
 	if jsonOutputEnabled() {
+		if packages == nil {
+			// JSON stability: an empty install reports [] rather than null.
+			packages = []engine.InstalledPackageVersions{}
+		}
 		return emitJSON(map[string]any{"packages": packages, "count": len(packages), "allVersions": true})
 	}
 
