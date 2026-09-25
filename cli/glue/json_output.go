@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"strings"
 
 	"github.com/gluestick-sh/core/apperr"
 	"github.com/gluestick-sh/core/engine"
@@ -40,36 +39,14 @@ type jsonResultItem struct {
 	Hint   string         `json:"hint,omitempty"` // optional remediation hint
 }
 
-// jsonErrorInfo maps an error to a stable machine-readable code and optional hint.
-// Codes are part of the agent contract (roadmap §3.2) and must only be added, never renamed.
+// jsonErrorInfo maps an error to a stable machine-readable code and optional
+// hint. Typed core errors delegate to apperr.Code; the CLI-only usage error
+// maps here because it has no core representation.
 func jsonErrorInfo(err error) (code, hint string) {
-	if err == nil {
-		return "", ""
+	if errors.Is(err, errUsage) {
+		return "usage", ""
 	}
-	var suggest *apperr.ManifestSuggest
-	var bucketMissing *apperr.BucketNotInstalled
-	var bucketNotFound *apperr.BucketNotFound
-	switch {
-	case errors.As(err, &suggest), errors.Is(err, apperr.ErrManifestNotFound):
-		code = "manifest_not_found"
-		if suggest != nil {
-			hint = strings.Join(suggest.Hints, "\n")
-		}
-	case errors.Is(err, apperr.ErrManifestAmbiguous):
-		code = "manifest_ambiguous"
-	case errors.As(err, &bucketMissing), errors.Is(err, apperr.ErrBucketNotInstalled):
-		code = "bucket_not_installed"
-	case errors.As(err, &bucketNotFound), errors.Is(err, apperr.ErrBucketNotFound):
-		code = "bucket_not_found"
-		hint = "glue bucket list shows installed buckets"
-	case errors.Is(err, apperr.ErrPackageNotInstalled):
-		code = "package_not_installed"
-	case errors.Is(err, errUsage):
-		code = "usage"
-	default:
-		code = "unknown"
-	}
-	return code, hint
+	return apperr.Code(err)
 }
 
 func jsonOperationResult(command string, items []jsonResultItem) error {

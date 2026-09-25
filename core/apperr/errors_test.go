@@ -48,3 +48,31 @@ func TestBucketNotFoundIs(t *testing.T) {
 		t.Fatal("BucketNotFound must not be confused with BucketNotInstalled")
 	}
 }
+
+func TestCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+		hint string
+	}{
+		{"nil", nil, "", ""},
+		{"manifest not found sentinel", ErrManifestNotFound, "manifest_not_found", ""},
+		{"manifest not found typed", &ManifestNotFound{Name: "foo"}, "manifest_not_found", ""},
+		{"manifest suggest with hints", &ManifestSuggest{Cause: &ManifestNotFound{Name: "foo"}, Hints: []string{"glue install extras/foo", "glue install main/foo"}}, "manifest_not_found", "glue install extras/foo\nglue install main/foo"},
+		{"manifest ambiguous", ErrManifestAmbiguous, "manifest_ambiguous", ""},
+		{"bucket not installed sentinel", ErrBucketNotInstalled, "bucket_not_installed", ""},
+		{"bucket not installed typed", &BucketNotInstalled{Name: "extras"}, "bucket_not_installed", ""},
+		{"bucket not found sentinel", ErrBucketNotFound, "bucket_not_found", "glue bucket list shows installed buckets"},
+		{"bucket not found typed", &BucketNotFound{Name: "extras"}, "bucket_not_found", "glue bucket list shows installed buckets"},
+		{"package not installed", ErrPackageNotInstalled, "package_not_installed", ""},
+		{"wrapped", fmt.Errorf("remove bucket: %w", &BucketNotFound{Name: "extras"}), "bucket_not_found", "glue bucket list shows installed buckets"},
+		{"unknown", errors.New("download failed"), "unknown", ""},
+	}
+	for _, tt := range tests {
+		code, hint := Code(tt.err)
+		if code != tt.code || hint != tt.hint {
+			t.Errorf("%s: Code() = (%q, %q), want (%q, %q)", tt.name, code, hint, tt.code, tt.hint)
+		}
+	}
+}

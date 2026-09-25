@@ -139,3 +139,36 @@ func IsResolveNotice(err error) bool {
 	}
 	return errors.Is(err, ErrManifestNotFound) || errors.Is(err, ErrManifestAmbiguous)
 }
+
+// Code maps err to its stable machine-readable code and optional remediation
+// hint. The codes are part of the agent contract (roadmap §3.2): they may be
+// added but never renamed or removed, and they are the single source of truth
+// shared by the CLI --json and MCP paths. err == nil returns ("", ""); an error
+// with no typed mapping returns ("unknown", "").
+func Code(err error) (code, hint string) {
+	if err == nil {
+		return "", ""
+	}
+	var suggest *ManifestSuggest
+	var bucketMissing *BucketNotInstalled
+	var bucketNotFound *BucketNotFound
+	switch {
+	case errors.As(err, &suggest), errors.Is(err, ErrManifestNotFound):
+		code = "manifest_not_found"
+		if suggest != nil {
+			hint = strings.Join(suggest.Hints, "\n")
+		}
+	case errors.Is(err, ErrManifestAmbiguous):
+		code = "manifest_ambiguous"
+	case errors.As(err, &bucketMissing), errors.Is(err, ErrBucketNotInstalled):
+		code = "bucket_not_installed"
+	case errors.As(err, &bucketNotFound), errors.Is(err, ErrBucketNotFound):
+		code = "bucket_not_found"
+		hint = "glue bucket list shows installed buckets"
+	case errors.Is(err, ErrPackageNotInstalled):
+		code = "package_not_installed"
+	default:
+		code = "unknown"
+	}
+	return code, hint
+}
