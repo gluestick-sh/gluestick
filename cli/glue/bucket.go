@@ -217,7 +217,7 @@ var bucketListCmd = &cobra.Command{
 		buckets := br.List()
 
 		if jsonOutputEnabled() {
-			return emitJSON(map[string]any{"buckets": bucketJSONEntries(buckets), "count": len(buckets)})
+			return emitJSON(jsonBucketListResult{Buckets: bucketJSONEntries(buckets), Count: len(buckets)})
 		}
 
 		if len(buckets) == 0 {

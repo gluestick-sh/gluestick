@@ -61,11 +61,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 			// JSON stability: a fully failed request reports [] rather than null.
 			details = []*engine.InstalledPackageDetail{}
 		}
-		payload := map[string]any{"packages": details, "count": len(details)}
-		if len(failed) > 0 {
-			payload["failed"] = failed
-		}
-		if err := emitJSON(payload); err != nil {
+		if err := emitJSON(jsonInfoResult{Packages: details, Count: len(details), Failed: failed}); err != nil {
 			return err
 		}
 		if len(failed) > 0 {

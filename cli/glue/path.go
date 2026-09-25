@@ -50,11 +50,11 @@ var pathCheckCmd = &cobra.Command{
 		shadowed := storeAliasShadowsShims(shimMgr.BinDir())
 
 		if jsonOutputEnabled() {
-			if err := emitJSON(map[string]any{
-				"in_path":               inPath,
-				"bin_dir":               shimMgr.BinDir(),
-				"store_alias_shadowing": shadowed,
-				"ok":                    inPath && !shadowed,
+			if err := emitJSON(jsonPathCheckResult{
+				InPath:              inPath,
+				BinDir:              shimMgr.BinDir(),
+				StoreAliasShadowing: shadowed,
+				OK:                  inPath && !shadowed,
 			}); err != nil {
 				return err
 			}

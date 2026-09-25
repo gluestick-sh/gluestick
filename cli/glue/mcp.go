@@ -217,11 +217,7 @@ func runMCPSearch(ctx context.Context, eng *engine.Engine, in mcpSearchInput) (a
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	return map[string]any{
-		"query":   in.Query,
-		"results": packages,
-		"count":   len(packages),
-	}, nil
+	return jsonSearchResult{Query: in.Query, Results: packages, Count: len(packages)}, nil
 }
 
 // runMCPList mirrors `glue list --json` (sorted by package name).
@@ -235,10 +231,7 @@ func runMCPList(ctx context.Context, eng *engine.Engine, in mcpListInput) (any, 
 		// JSON stability: an empty install reports [] rather than null.
 		packages = []*engine.Package{}
 	}
-	return map[string]any{
-		"packages": packages,
-		"count":    len(packages),
-	}, nil
+	return jsonListResult{Packages: packages, Count: len(packages)}, nil
 }
 
 // runMCPDoctor mirrors the `glue doctor --json` report; MCP is available now
@@ -261,10 +254,7 @@ func runMCPInfo(eng *engine.Engine, in mcpInfoInput) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("info %s: %w", in.Package, err)
 	}
-	return map[string]any{
-		"packages": []*engine.InstalledPackageDetail{detail},
-		"count":    1,
-	}, nil
+	return jsonInfoResult{Packages: []*engine.InstalledPackageDetail{detail}, Count: 1}, nil
 }
 
 // runMCPDepends mirrors `glue depends --json` for one package ref.
@@ -296,12 +286,7 @@ func runMCPPathCheck(root string) (any, error) {
 	}
 	inPath := mgr.InPath()
 	shadowed := engine.StoreAliasShadowsShims(mgr.BinDir())
-	return map[string]any{
-		"in_path":               inPath,
-		"bin_dir":               mgr.BinDir(),
-		"store_alias_shadowing": shadowed,
-		"ok":                    inPath && !shadowed,
-	}, nil
+	return jsonPathCheckResult{InPath: inPath, BinDir: mgr.BinDir(), StoreAliasShadowing: shadowed, OK: inPath && !shadowed}, nil
 }
 
 // runMCPBucketList mirrors `glue bucket list --json` (registry read only; no
@@ -313,8 +298,5 @@ func runMCPBucketList(root string) (any, error) {
 	}
 	br.ReloadFromDisk()
 	buckets := br.List()
-	return map[string]any{
-		"buckets": bucketJSONEntries(buckets),
-		"count":   len(buckets),
-	}, nil
+	return jsonBucketListResult{Buckets: bucketJSONEntries(buckets), Count: len(buckets)}, nil
 }

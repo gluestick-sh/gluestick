@@ -68,7 +68,7 @@ func runList(cmd *cobra.Command, args []string) error {
 			// JSON stability: an empty install reports [] rather than null.
 			packages = []*engine.Package{}
 		}
-		return emitJSON(map[string]any{"packages": packages, "count": len(packages)})
+		return emitJSON(jsonListResult{Packages: packages, Count: len(packages)})
 	}
 
 	if len(packages) == 0 {

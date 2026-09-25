@@ -37,16 +37,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("search: %w", err)
 	}
 
-	if len(packages) == 0 {
-		if jsonOutputEnabled() {
-			return emitJSON(map[string]any{"query": args[0], "results": packages, "count": 0})
-		}
-		fmt.Printf("No results found for '%s'\n", args[0])
-		return nil
+	if jsonOutputEnabled() {
+		return emitJSON(jsonSearchResult{Query: args[0], Results: packages, Count: len(packages)})
 	}
 
-	if jsonOutputEnabled() {
-		return emitJSON(map[string]any{"query": args[0], "results": packages, "count": len(packages)})
+	if len(packages) == 0 {
+		fmt.Printf("No results found for '%s'\n", args[0])
+		return nil
 	}
 
 	fmt.Printf("Found %d result(s):\n\n", len(packages))
