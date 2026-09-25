@@ -2,6 +2,8 @@
 
 # Build artifacts
 *.exe
+# `go build -o foo.exe` keeps a backup when foo.exe is still running
+*.exe~
 *.test
 *.out
 /dist/

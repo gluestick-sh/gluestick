@@ -20,6 +20,11 @@ go test ./cli/... ./core/... ./shim/...    # run all tests
 go test ./core/engine/...    # run one package's tests
 go build -o glue-alpha.exe ./cli/glue      # dev build (see isolation below)
 go build -o shim.exe ./shim
+
+# MCP stdio E2E through the real binary (opt-in; skipped without GLUE_MCP_BIN).
+# It drives the dev data root (%USERPROFILE%\.glue-alpha); GLUE_MCP_ROOT overrides.
+$env:GLUE_MCP_BIN = "$PWD\glue-alpha.exe"
+go test ./cli/glue -run TestMCPStdio -count=1 -v
 ```
 
 - IMPORTANT: in workspace mode `./...` is **invalid from the `go.work` root** (the
@@ -27,6 +32,8 @@ go build -o shim.exe ./shim
   `cd` into a module first.
 - `go.work` and `go.work.sum` are **committed** (build definition of the monorepo).
   Never gitignore them.
+- IDE-client MCP setup, the JSON-RPC self-test and the acceptance script live in
+  `docs/mcp.md` ("Client configuration").
 
 ### Line endings (IMPORTANT)
 
