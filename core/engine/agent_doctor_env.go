@@ -211,6 +211,11 @@ func gitBashShadowsShims(bashPath, shimDir, pathList string) bool {
 // agentCheckAgents reports which agent CLIs resolve on PATH. Readiness never
 // depends on their presence (glue prepares the machine for any agent), so the
 // check passes once at least one is installed and stays advisory otherwise.
+//
+// The verdict is CLI-only on purpose: readiness means an agent can drive the
+// whole chain unattended. Data carries a second view for machines run from an
+// IDE: data.clients lists the MCP-capable clients detected on disk and whether
+// they already register glue (advisory-only, never changes the verdict).
 func agentCheckAgents() DoctorCheck {
 	c := DoctorCheck{ID: message.AgentCheckAgents, Level: AgentLevelAdvisory}
 	specs := []struct {
@@ -232,7 +237,8 @@ func agentCheckAgents() DoctorCheck {
 		}
 		tools = append(tools, p)
 	}
-	c.Data = map[string]any{"tools": tools, "found": found}
+	clients := probeAgentClients(currentAgentClientEnv())
+	c.Data = map[string]any{"tools": tools, "found": found, "clients": clients}
 	if len(found) > 0 {
 		c.OK = true
 		c.DetailKey = message.AgentAgentsFound

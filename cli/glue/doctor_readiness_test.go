@@ -27,6 +27,42 @@ func captureStderrToFile(t *testing.T, fn func()) string {
 	return captureStreamToFile(t, &os.Stderr, fn)
 }
 
+// TestWriteAgentCheckRow_rendersClients pins the human view of data.clients: the
+// agents verdict stays CLI-only, so the client sub-rows explain an
+// "agent CLI not found" result on a machine driven from inside an IDE.
+func TestWriteAgentCheckRow_rendersClients(t *testing.T) {
+	check := engine.DoctorCheck{
+		ID:         message.AgentCheckAgents,
+		Level:      engine.AgentLevelAdvisory,
+		Status:     engine.AgentStatusFail,
+		DetailText: "claude, codex, opencode not found",
+		Hint:       "Install an agent CLI",
+		Data: map[string]any{
+			"tools": []engine.CommonToolProbe{{Name: "Claude Code"}, {Name: "Codex"}, {Name: "OpenCode"}},
+			"clients": []engine.AgentClientProbe{
+				{Name: "Cline", Detected: false},
+				{Name: "GitHub Copilot Chat", Detected: true, Wired: true, Config: `C:\Users\me\AppData\Roaming\Code\User\mcp.json`},
+				{Name: "Cursor agent", Detected: true, Config: `C:\Users\me\.cursor\mcp.json`},
+				{Name: "Claude Desktop", Detected: true},
+			},
+		},
+	}
+
+	out := captureStdoutToFile(t, func() { writeAgentCheckRow(check) })
+	for _, want := range []string{
+		"GitHub Copilot Chat",
+		"installed, glue MCP registered",
+		"installed, glue not registered",
+		"installed, no MCP config yet",
+		"not installed",
+		"Install an agent CLI",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func captureStreamToFile(t *testing.T, target **os.File, fn func()) string {
 	t.Helper()
 	old := *target

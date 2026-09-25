@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -182,5 +184,107 @@ func TestWriteDoctorFixLines_reportsReportOnly(t *testing.T) {
 	}
 	if strings.Contains(out, "✓") {
 		t.Fatalf("report-only line must not use the success mark:\n%s", out)
+	}
+}
+
+// TestDoctorFixStepForCheck_bucketReasons pins the honest routing for the
+// buckets check: only "no buckets at all" may add main — an installed bucket
+// with an unready or empty index needs a reindex (offline) or a re-pull.
+func TestDoctorFixStepForCheck_bucketReasons(t *testing.T) {
+	cases := []struct {
+		detailKey  string
+		wantAction string
+		wantTitle  string
+	}{
+		{message.AgentBucketsEmpty, "bucket_add", "Add main bucket"},
+		{message.AgentBucketsIndexNotReady, "reindex_buckets", "Rebuild bucket index"},
+		{message.AgentBucketsNoManifests, "bucket_pull", "Refresh bucket manifests"},
+		{message.AgentBucketsOK, "bucket_add", "Add main bucket"},
+	}
+	for _, tc := range cases {
+		step, ok := doctorFixStepForCheck(engine.DoctorCheck{ID: message.AgentCheckBuckets, DetailKey: tc.detailKey})
+		if !ok {
+			t.Fatalf("no fix step for buckets/%s", tc.detailKey)
+		}
+		if step.action != tc.wantAction || step.title != tc.wantTitle {
+			t.Fatalf("buckets/%s → %q/%q, want %q/%q", tc.detailKey, step.action, step.title, tc.wantAction, tc.wantTitle)
+		}
+	}
+
+	// Other checks keep their static plan entry.
+	step, ok := doctorFixStepForCheck(engine.DoctorCheck{ID: message.AgentCheckShellUTF8})
+	if !ok || step.action != "set_utf8" {
+		t.Fatalf("shell_utf8 → %+v, want the static set_utf8 step", step)
+	}
+}
+
+// TestDoctorFixTitleForResult covers the human title of a reason-specific fix:
+// the applied action wins over the static plan entry.
+func TestDoctorFixTitleForResult(t *testing.T) {
+	cases := []struct {
+		res  engine.AgentFixResult
+		want string
+	}{
+		{engine.AgentFixResult{Check: message.AgentCheckBuckets, Action: "bucket_add"}, "Add main bucket"},
+		{engine.AgentFixResult{Check: message.AgentCheckBuckets, Action: "reindex_buckets"}, "Rebuild bucket index"},
+		{engine.AgentFixResult{Check: message.AgentCheckBuckets, Action: "bucket_pull"}, "Refresh bucket manifests"},
+		{engine.AgentFixResult{Check: message.AgentCheckDuplicates, Action: "report_duplicates"}, "Detect duplicate runtimes"},
+		{engine.AgentFixResult{Check: "unknown_check", Action: "whatever"}, "unknown_check"},
+	}
+	for _, tc := range cases {
+		if got := doctorFixTitleForResult(tc.res); got != tc.want {
+			t.Fatalf("title(%s/%s) = %q, want %q", tc.res.Check, tc.res.Action, got, tc.want)
+		}
+	}
+}
+
+// TestFixReindexBuckets rebuilds the in-memory search index from the local
+// bucket dirs without touching the network (valid under --offline).
+func TestFixReindexBuckets(t *testing.T) {
+	root := t.TempDir()
+	bucketDir := filepath.Join(root, "buckets", "demo", "bucket")
+	if err := os.MkdirAll(bucketDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":"1.0.0","url":"https://example.com/demo.zip","hash":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}`
+	if err := os.WriteFile(filepath.Join(bucketDir, "demo.json"), []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := engine.NewEngine(&engine.EngineConfig{RootDir: root})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	defer eng.Close()
+
+	applied, detail, errMsg := fixReindexBuckets(eng)
+	if !applied || errMsg != "" {
+		t.Fatalf("reindex applied=%v err=%q", applied, errMsg)
+	}
+	if !strings.Contains(detail, "demo") {
+		t.Fatalf("detail = %q, want the reindexed bucket list", detail)
+	}
+	if counts := eng.PackageCountsByBucket(); counts["demo"] != 1 {
+		t.Fatalf("demo packages = %d, want 1 after reindex (%+v)", counts["demo"], counts)
+	}
+}
+
+// TestFixPullBucketManifests_offline pins the offline guard: the pull step never
+// touches the network under --offline and reports why.
+func TestFixPullBucketManifests_offline(t *testing.T) {
+	step, ok := doctorFixStepForCheck(engine.DoctorCheck{ID: message.AgentCheckBuckets, DetailKey: message.AgentBucketsNoManifests})
+	if !ok {
+		t.Fatal("no fix step for the no-manifests reason")
+	}
+	offline := true
+	eng, err := engine.NewEngine(&engine.EngineConfig{RootDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	defer eng.Close()
+
+	applied, _, errMsg := runDoctorFix(context.Background(), step, engine.AgentDoctorReport{}, engine.DoctorCheck{}, eng, offline)
+	if applied || !strings.Contains(errMsg, "offline") {
+		t.Fatalf("offline pull applied=%v err=%q, want an offline skip", applied, errMsg)
 	}
 }

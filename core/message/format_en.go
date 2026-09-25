@@ -319,6 +319,8 @@ func FormatEN(key string, args map[string]any) string {
 		return "Agent policy is configured"
 	case AgentPolicyNotConfigured:
 		return "Agent policy is not configured"
+	case AgentPolicyDefaults:
+		return "Agent policy uses the defaults (confirm mode, no deny/protected list)"
 	case AgentMachineOSOK:
 		return "Operating system is supported"
 	case AgentMachineOSUnsupported:
@@ -391,6 +393,10 @@ func FormatEN(key string, args map[string]any) string {
 		return "git and 7-Zip are downloaded automatically on first use; check network access"
 	case AgentHintBuckets:
 		return "Run glue bucket add main to install a bucket"
+	case AgentHintBucketsIndexBusy:
+		return "Bucket index is still building: wait a moment and re-run glue doctor; if it persists, close other glue processes using this data root"
+	case AgentHintBucketsNoManifests:
+		return "Run glue bucket update to re-fetch the bucket manifests (glue doctor --fix does this online)"
 	case AgentHintToolchain:
 		return "Install missing tools with glue install (for example: glue install nodejs)"
 	case AgentHintShimProbe:
@@ -398,7 +404,7 @@ func FormatEN(key string, args map[string]any) string {
 	case AgentHintMCP:
 		return "Run glue mcp (stdio) and register that command in your MCP client"
 	case AgentHintPolicy:
-		return "Policy gates (deny/protected/confirm) arrive with the MCP phase (roadmap 4.6.2)"
+		return "Set the gates with glue config set agent.policy.deny|protected|mode (or agent.auto_yes) — see docs/mcp.md"
 	case AgentHintMachineOS:
 		return "Upgrade to a supported Windows build (Windows 10 1809 or later)"
 	case AgentHintPWSH:

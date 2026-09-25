@@ -206,7 +206,8 @@ func writeAgentDoctorReport(report engine.AgentDoctorReport, fixRan bool) {
 }
 
 // writeAgentCheckRow prints one check row, expanding data.tools into per-tool
-// sub-rows (toolchain versions, agent CLI presence).
+// sub-rows (toolchain versions, agent CLI presence) and data.clients into the
+// MCP clients detected on this machine.
 func writeAgentCheckRow(check engine.DoctorCheck) {
 	if tools, ok := check.Data["tools"].([]engine.CommonToolProbe); ok && len(tools) > 0 {
 		for _, tool := range tools {
@@ -220,6 +221,7 @@ func writeAgentCheckRow(check engine.DoctorCheck) {
 			}
 			fmt.Printf("  %s %-24s %s\n", mark, tool.Name, detail)
 		}
+		writeAgentClientRows(check)
 		if check.Status == engine.AgentStatusFail && check.Hint != "" {
 			fmt.Printf("       → %s\n", check.Hint)
 		}
@@ -240,5 +242,31 @@ func writeAgentCheckRow(check engine.DoctorCheck) {
 	fmt.Printf("  %s %-24s %s\n", agentMark(check), agentCheckLabel(check.ID), formatDoctorDetail(check))
 	if check.Status == engine.AgentStatusFail && check.Hint != "" {
 		fmt.Printf("       → %s\n", check.Hint)
+	}
+}
+
+// writeAgentClientRows renders data.clients: the MCP-capable clients found on
+// this machine and whether they already register Glue. The `agents` verdict
+// above stays CLI-only, so these rows exist to explain an "agent CLI not found"
+// result on a machine that is driven from inside an IDE.
+func writeAgentClientRows(check engine.DoctorCheck) {
+	clients, ok := check.Data["clients"].([]engine.AgentClientProbe)
+	if !ok || len(clients) == 0 {
+		return
+	}
+	for _, client := range clients {
+		if !client.Detected {
+			fmt.Printf("  %s %-24s %s\n", markSkip, client.Name, "not installed")
+			continue
+		}
+		if client.Wired {
+			fmt.Printf("  %s %-24s %s\n", markSuccess, client.Name, "installed, glue MCP registered")
+			continue
+		}
+		if client.Config != "" {
+			fmt.Printf("  %s %-24s %s\n", markWarn, client.Name, "installed, glue not registered ("+client.Config+")")
+			continue
+		}
+		fmt.Printf("  %s %-24s %s\n", markWarn, client.Name, "installed, no MCP config yet")
 	}
 }

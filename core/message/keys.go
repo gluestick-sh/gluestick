@@ -170,15 +170,20 @@ const (
 	AgentMCPUnavailable        = "agent.mcp.unavailable"
 	AgentPolicyConfigured      = "agent.policy.configured"
 	AgentPolicyNotConfigured   = "agent.policy.not_configured"
+	AgentPolicyDefaults        = "agent.policy.defaults"
 
 	AgentHintShimAlias      = "agent.hint.shim_alias"
 	AgentHintShimRunner     = "agent.hint.shim_runner"
 	AgentHintInstallBackend = "agent.hint.install_backend"
 	AgentHintBuckets        = "agent.hint.buckets"
-	AgentHintToolchain      = "agent.hint.toolchain"
-	AgentHintShimProbe      = "agent.hint.shim_probe"
-	AgentHintMCP            = "agent.hint.mcp"
-	AgentHintPolicy         = "agent.hint.policy"
+	// Index-busy and no-manifest hints are separate: an installed-but-unindexed
+	// bucket needs a wait/reindex, not "add main" (see bucketsCheckVerdict).
+	AgentHintBucketsIndexBusy   = "agent.hint.buckets_index_busy"
+	AgentHintBucketsNoManifests = "agent.hint.buckets_no_manifests"
+	AgentHintToolchain          = "agent.hint.toolchain"
+	AgentHintShimProbe          = "agent.hint.shim_probe"
+	AgentHintMCP                = "agent.hint.mcp"
+	AgentHintPolicy             = "agent.hint.policy"
 )
 
 // Environment readiness checks (machine/shell/agents/workspace report sections)

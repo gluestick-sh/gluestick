@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ var doctorFixSteps = []doctorFixStep{
 	{message.AgentCheckDuplicates, "report_duplicates", "Detect duplicate runtimes", true},
 }
 
-// doctorFixStepFor returns the fix-plan entry for a check.
+// doctorFixStepFor returns the static fix-plan entry for a check.
 func doctorFixStepFor(id string) (doctorFixStep, bool) {
 	for _, step := range doctorFixSteps {
 		if step.check == id {
@@ -58,11 +59,63 @@ func doctorFixStepFor(id string) (doctorFixStep, bool) {
 	return doctorFixStep{}, false
 }
 
+// doctorFixStepForCheck resolves the effective step for one failed check: the
+// static plan entry, unless the check's reason changes the honest remediation.
+// Buckets are the case that matters — they can be installed and still have
+// nothing indexed, where "add main" is a no-op (fixAddMainBucket returns early
+// when main exists) and would report a fix that never happened:
+//
+//   - index not ready → reindex the in-memory search index from the local
+//     bucket dirs (offline, no network), which is what the stale state needs;
+//   - no manifests at all → re-fetch the buckets (network), or skip under
+//     --offline with a reason.
+//
+// One resolver feeds the fix plan, the JSON `fixes[]` and the human lines, so
+// the three can never disagree about what ran.
+func doctorFixStepForCheck(check engine.DoctorCheck) (doctorFixStep, bool) {
+	step, ok := doctorFixStepFor(check.ID)
+	if !ok {
+		return doctorFixStep{}, false
+	}
+	if check.ID != message.AgentCheckBuckets {
+		return step, true
+	}
+	switch check.DetailKey {
+	case message.AgentBucketsIndexNotReady:
+		return doctorFixStep{check: step.check, action: "reindex_buckets", title: "Rebuild bucket index"}, true
+	case message.AgentBucketsNoManifests:
+		return doctorFixStep{check: step.check, action: "bucket_pull", title: "Refresh bucket manifests"}, true
+	}
+	return step, true
+}
+
 // doctorFixTitle returns the human title of one fix line ("" when unknown).
 func doctorFixTitle(check string) string {
 	step, ok := doctorFixStepFor(check)
 	if !ok {
 		return check
+	}
+	return step.title
+}
+
+// doctorFixActionTitles names the reason-specific variants resolved by
+// doctorFixStepForCheck (the static table holds the check's default action).
+var doctorFixActionTitles = map[string]string{
+	"reindex_buckets": "Rebuild bucket index",
+	"bucket_pull":     "Refresh bucket manifests",
+}
+
+// doctorFixTitleForResult picks the title of a finished fix: the reason-specific
+// variant when the applied action differs from the static plan entry.
+func doctorFixTitleForResult(res engine.AgentFixResult) string {
+	step, ok := doctorFixStepFor(res.Check)
+	if !ok {
+		return res.Check
+	}
+	if step.action != res.Action {
+		if title, ok := doctorFixActionTitles[res.Action]; ok {
+			return title
+		}
 	}
 	return step.title
 }
@@ -90,7 +143,7 @@ func doctorFixableChecks(report engine.AgentDoctorReport) []string {
 		if check.Status != engine.AgentStatusFail {
 			continue
 		}
-		step, ok := doctorFixStepFor(check.ID)
+		step, ok := doctorFixStepForCheck(check)
 		if !ok || step.reportOnly || skip[check.ID] {
 			continue
 		}
@@ -118,6 +171,9 @@ func applyDoctorFixes(ctx context.Context, eng *engine.Engine, report engine.Age
 		check, ok := checkByID[step.check]
 		if !ok || check.Status != engine.AgentStatusFail || skip[step.check] {
 			continue
+		}
+		if resolved, ok := doctorFixStepForCheck(check); ok {
+			step = resolved
 		}
 		res := engine.AgentFixResult{Check: step.check, Action: step.action}
 		if prev, shared := executed[step.action]; shared {
@@ -150,6 +206,15 @@ func runDoctorFix(ctx context.Context, step doctorFixStep, report engine.AgentDo
 		}
 		applied, err := fixAddMainBucket(report.DataRoot, eng)
 		return applied, "", err
+	case "reindex_buckets":
+		// Installed-but-unindexed: rebuild the in-memory search index from the
+		// local bucket dirs. Offline-safe — nothing is downloaded.
+		return fixReindexBuckets(eng)
+	case "bucket_pull":
+		if offline {
+			return false, "", "offline: skipped (run glue bucket update without --offline)"
+		}
+		return fixPullBucketManifests(eng)
 	case "set_utf8":
 		return fixUTF8Codepage()
 	case "install_pwsh":
@@ -169,6 +234,47 @@ func runDoctorFix(ctx context.Context, step doctorFixStep, report engine.AgentDo
 		return true, duplicatesFixDetail(check), ""
 	}
 	return false, "", "unknown fix action: " + step.action
+}
+
+// fixReindexBuckets rescans every installed bucket into the in-memory search
+// index. It is the honest remedy for "buckets installed, index not ready": the
+// index is built in the background, so a stale or failed build leaves the check
+// failing while the bucket dirs are perfectly fine. Nothing is downloaded, so
+// this runs under --offline too.
+func fixReindexBuckets(eng *engine.Engine) (bool, string, string) {
+	if eng == nil || eng.BucketRegistry == nil {
+		return false, "", "engine is not available"
+	}
+	names := []string{}
+	for _, b := range eng.BucketRegistry.List() {
+		eng.LoadSearchIndexBucket(b.Name)
+		names = append(names, b.Name)
+	}
+	if len(names) == 0 {
+		return false, "", "no buckets to reindex"
+	}
+	sort.Strings(names)
+	return true, "reindexed " + strings.Join(names, ", "), ""
+}
+
+// fixPullBucketManifests re-fetches the installed buckets so an empty bucket dir
+// gets its manifests back. Network-bound and therefore skipped under --offline,
+// exactly like the add-main step.
+func fixPullBucketManifests(eng *engine.Engine) (bool, string, string) {
+	if eng == nil || eng.BucketRegistry == nil {
+		return false, "", "engine is not available"
+	}
+	reg := eng.BucketRegistry
+	if err := reg.UpdateSilent(nil); err != nil {
+		return false, "", err.Error()
+	}
+	eng.ReloadBuckets(true)
+	names := []string{}
+	for _, b := range reg.List() {
+		names = append(names, b.Name)
+	}
+	sort.Strings(names)
+	return true, "pulled " + strings.Join(names, ", "), ""
 }
 
 // fixShimPath puts the data root's shims first on the user PATH — the same
@@ -417,7 +523,7 @@ func writeDoctorFixLines(results []engine.AgentFixResult) {
 		return
 	}
 	for _, res := range results {
-		title := doctorFixTitle(res.Check)
+		title := doctorFixTitleForResult(res)
 		if step, ok := doctorFixStepFor(res.Check); ok && step.reportOnly {
 			fmt.Printf("  %s %s — report only\n", markSkip, title)
 			if res.Detail != "" {

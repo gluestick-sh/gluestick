@@ -11,8 +11,61 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gluestick-sh/core/config"
 	"github.com/gluestick-sh/core/message"
 )
+
+// TestAgentCheckPolicy_reflectsConfig pins the readiness check for the MCP
+// policy gates (roadmap section 4.6.2): a root without agent settings stays
+// advisory with the current defaults spelled out, while any explicit setting
+// (deny, protected, a non-confirm mode or auto_yes) passes.
+func TestAgentCheckPolicy_reflectsConfig(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		c := agentCheckPolicy(t.TempDir())
+		if c.OK || c.Status != "fail" || c.Level != AgentLevelAdvisory {
+			t.Fatalf("empty root must stay an advisory failure: %+v", c)
+		}
+		if c.DetailKey != message.AgentPolicyDefaults {
+			t.Fatalf("detailKey = %q, want %q", c.DetailKey, message.AgentPolicyDefaults)
+		}
+		data := c.Data
+		if data["configured"] != false || data["mode"] != config.AgentPolicyModeConfirm {
+			t.Fatalf("data = %+v, want configured=false mode=confirm", c.Data)
+		}
+		if strings.Contains(c.Hint, "arrive with the MCP phase") || c.Hint == "" {
+			t.Fatalf("hint must describe the shipped gates, got %q", c.Hint)
+		}
+	})
+
+	configured := []struct {
+		name string
+		cfg  string
+	}{
+		{"deny list", `{"agent":{"policy":{"deny":["uninstall","bucket_remove"]}}}`},
+		{"protected list", `{"agent":{"policy":{"protected":["main"]}}}`},
+		{"mode auto", `{"agent":{"policy":{"mode":"auto"}}}`},
+		{"auto yes", `{"agent":{"auto_yes":true}}`},
+	}
+	for _, tc := range configured {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(config.Path(root), []byte(tc.cfg), 0644); err != nil {
+				t.Fatalf("write config.json: %v", err)
+			}
+			c := agentCheckPolicy(root)
+			if !c.OK || c.Status != "pass" {
+				t.Fatalf("configured policy must pass: %+v", c)
+			}
+			if c.DetailKey != message.AgentPolicyConfigured {
+				t.Fatalf("detailKey = %q, want %q", c.DetailKey, message.AgentPolicyConfigured)
+			}
+			data := c.Data
+			if data["configured"] != true {
+				t.Fatalf("data = %+v, want configured=true", c.Data)
+			}
+		})
+	}
+}
 
 // agentDoctorCheckOrder is the stable check order of glue doctor (readiness
 // view): grouped machine → shell → runtime → agents → workspace → glue.

@@ -131,7 +131,7 @@ func (e *Engine) RunAgentDoctor(ctx context.Context, opts AgentDoctorOptions) Ag
 		// agent compatibility
 		agentCheckAgents(),
 		agentCheckMCP(opts.MCPAvailable),
-		agentCheckPolicy(),
+		agentCheckPolicy(root),
 		// workspace
 		agentCheckWorkspaceFS(root),
 		agentCheckWorkspaceWSL(),
@@ -171,7 +171,7 @@ func (e *Engine) RunAgentDoctor(ctx context.Context, opts AgentDoctorOptions) Ag
 				continue
 			}
 			report.Summary.BlockingFailed = append(report.Summary.BlockingFailed, c.ID)
-			if action := agentActionFor(c.ID); action != "" {
+			if action := agentActionForCheck(c); action != "" {
 				report.NextActions = append(report.NextActions, action)
 			}
 		}
@@ -262,8 +262,20 @@ var agentNextActions = map[string]string{
 	message.AgentCheckNetwork:        "glue config set github_proxy <mirror-url>",
 }
 
-func agentActionFor(id string) string {
-	return agentNextActions[id]
+// agentActionForCheck resolves the next action for a failed check. Buckets are
+// reason-aware: "add main" only helps when no bucket is installed, while an
+// installed-but-unindexed bucket needs the background index build to finish and
+// a bucket with no manifests needs a re-pull.
+func agentActionForCheck(c DoctorCheck) string {
+	if c.ID == message.AgentCheckBuckets {
+		switch c.DetailKey {
+		case message.AgentBucketsIndexNotReady:
+			return "glue doctor"
+		case message.AgentBucketsNoManifests:
+			return "glue bucket update"
+		}
+	}
+	return agentNextActions[c.ID]
 }
 
 // statusFromOK derives the agent check status from its boolean result.
@@ -446,39 +458,74 @@ func (e *Engine) agentCheckBuckets(ctx context.Context) DoctorCheck {
 	buckets := e.BucketRegistry.List()
 	bucketData := make([]map[string]any, 0, len(buckets))
 	total := 0
+	indexed := 0
 	for _, b := range buckets {
 		count := counts[b.Name]
 		total += count
+		if count > 0 {
+			indexed++
+		}
 		bucketData = append(bucketData, map[string]any{"name": b.Name, "packages": count})
 	}
 
 	c.Data = map[string]any{
-		"buckets":        bucketData,
-		"bucket_count":   len(buckets),
-		"manifest_count": total,
-		"index_ready":    indexReady,
+		"buckets":         bucketData,
+		"bucket_count":    len(buckets),
+		"buckets_indexed": indexed,
+		"manifest_count":  total,
+		"index_ready":     indexReady,
 	}
 
-	switch {
-	case len(buckets) == 0:
-		c.DetailKey = message.AgentBucketsEmpty
-		c.HintKey = message.AgentHintBuckets
-	case !indexReady:
-		c.DetailKey = message.AgentBucketsIndexNotReady
-		c.HintKey = message.AgentHintBuckets
-	case total == 0:
-		c.DetailKey = message.AgentBucketsNoManifests
-		c.HintKey = message.AgentHintBuckets
-	default:
-		c.OK = true
-		c.DetailKey = message.AgentBucketsOK
-		c.DetailText = fmt.Sprintf("%d buckets, %d packages", len(buckets), total)
-	}
-	if !c.OK {
+	verdict := bucketsCheckVerdict(len(buckets), indexed, total, indexReady)
+	c.OK = verdict.ok
+	c.DetailKey = verdict.detailKey
+	c.DetailText = verdict.detail
+	if !c.OK && verdict.hintKey != "" {
+		c.HintKey = verdict.hintKey
 		c.Hint = doctorHint(c.HintKey)
 	}
 	c.Status = statusFromOK(c.OK)
 	return c
+}
+
+// bucketsVerdict is the decision table behind agentCheckBuckets, kept pure so
+// every reason (and its message keys) can be unit-tested without an engine.
+// The failure hints matter: buckets can be installed and still have an empty
+// index, so "add main" would be wrong advice there — rescanning is the fix.
+type bucketsVerdict struct {
+	ok        bool
+	detailKey string
+	detail    string
+	hintKey   string
+}
+
+func bucketsCheckVerdict(bucketCount, indexed, total int, indexReady bool) bucketsVerdict {
+	switch {
+	case bucketCount == 0:
+		return bucketsVerdict{
+			detailKey: message.AgentBucketsEmpty,
+			detail:    "no buckets installed",
+			hintKey:   message.AgentHintBuckets,
+		}
+	case !indexReady:
+		return bucketsVerdict{
+			detailKey: message.AgentBucketsIndexNotReady,
+			detail:    fmt.Sprintf("%d of %d bucket(s) indexed, %d package(s)", indexed, bucketCount, total),
+			hintKey:   message.AgentHintBucketsIndexBusy,
+		}
+	case total == 0:
+		return bucketsVerdict{
+			detailKey: message.AgentBucketsNoManifests,
+			detail:    fmt.Sprintf("no manifests indexed from %d bucket(s)", bucketCount),
+			hintKey:   message.AgentHintBucketsNoManifests,
+		}
+	default:
+		return bucketsVerdict{
+			ok:        true,
+			detailKey: message.AgentBucketsOK,
+			detail:    fmt.Sprintf("%d buckets, %d packages", bucketCount, total),
+		}
+	}
 }
 
 // agentCheckNetwork verifies that buckets and downloads can be reached.
@@ -662,16 +709,53 @@ func agentCheckMCP(available bool) DoctorCheck {
 	return c
 }
 
-// agentCheckPolicy reports the agent policy gate state. Roadmap section 4.6.2
-// adds config.json agent.policy during the MCP phase; until then the gates are
-// not configured and this check stays advisory.
-func agentCheckPolicy() DoctorCheck {
+// agentCheckPolicy reports the agent policy gate state (roadmap section 4.6.2).
+// The gates shipped with the MCP phase, so the check reads config.json and
+// reports the effective policy instead of assuming the keys do not exist: an
+// explicit setting (auto_yes, a non-confirm mode, deny or protected entries)
+// passes; pure defaults stay advisory with those defaults spelled out.
+func agentCheckPolicy(root string) DoctorCheck {
 	c := DoctorCheck{ID: message.AgentCheckPolicy, Level: AgentLevelAdvisory}
-	c.Data = map[string]any{"configured": false}
-	c.DetailKey = message.AgentPolicyNotConfigured
-	c.DetailText = "gates (deny/protected/confirm) arrive with the MCP phase"
-	c.HintKey = message.AgentHintPolicy
-	c.Hint = doctorHint(c.HintKey)
+	settings, err := config.ReadAgent(root)
+	if err != nil {
+		c.DetailKey = message.AgentPolicyNotConfigured
+		c.DetailText = fmt.Sprintf("cannot read agent policy: %v", err)
+		c.HintKey = message.AgentHintPolicy
+		c.Hint = doctorHint(c.HintKey)
+		c.Status = statusFromOK(c.OK)
+		return c
+	}
+
+	deny := settings.Policy.Deny
+	if deny == nil {
+		deny = []string{}
+	}
+	protected := settings.Policy.Protected
+	if protected == nil {
+		protected = []string{}
+	}
+
+	configured := settings.AutoYes ||
+		settings.Policy.Mode != config.AgentPolicyModeConfirm ||
+		len(deny) > 0 || len(protected) > 0
+	c.OK = configured
+	c.Data = map[string]any{
+		"configured": configured,
+		"mode":       settings.Policy.Mode,
+		"auto_yes":   settings.AutoYes,
+		"deny":       deny,
+		"protected":  protected,
+	}
+	if configured {
+		c.DetailKey = message.AgentPolicyConfigured
+		c.DetailText = fmt.Sprintf("mode=%s auto_yes=%t deny=%d protected=%d",
+			settings.Policy.Mode, settings.AutoYes, len(deny), len(protected))
+	} else {
+		c.DetailKey = message.AgentPolicyDefaults
+		c.DetailText = fmt.Sprintf("defaults in effect: mode=%s, no deny/protected entries", settings.Policy.Mode)
+		c.HintKey = message.AgentHintPolicy
+		c.Hint = doctorHint(c.HintKey)
+	}
 	c.Status = statusFromOK(c.OK)
 	return c
 }
