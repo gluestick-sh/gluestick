@@ -1,0 +1,24 @@
+[package]
+name = "gluestick-shim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The glue shim runner — tiny launcher copied as <name>.exe on PATH"
+publish = false
+
+# The stub stays dependency-light (serde plus serde_json, nothing else): it is
+# copied next to every shim glue creates, and its size matters.
+# The package carries the gluestick- prefix (no std shadowing), while the
+# produced executable must stay `shim.exe` — core copies that name verbatim.
+[lib]
+name = "gluestick_shim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shim"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,36 @@
+# Project-local build settings.
+#
+# SQLite is the single largest non-Rust blob in glue.exe (measured baseline:
+# 723 KB of machine code, ~25% of the 2.8 MB binary). The bundled build compiles
+# the amalgamation with libsqlite3-sys's default feature set, which enables
+# whole subsystems this port never calls. Two kinds of switches are used:
+#
+#   -D SQLITE_OMIT_*   — compile the subsystem out entirely.
+#   -U SQLITE_ENABLE_* — undo a define that libsqlite3-sys's build.rs sets by
+#                        default (LIBSQLITE3_FLAGS is applied last, so -U wins).
+#
+# Every removal below is verified unused in this tree:
+#   FTS5 / FTS3         — no full-text tables anywhere (no `USING fts` in SQL).
+#   RTREE               — no spatial index.
+#   DBSTAT_VTAB         — no dbstat queries (only `PRAGMA page_count` style).
+#   STAT2 / STAT4       — planner stat tables are optional for our tiny index.
+#   MEMORY_MANAGEMENT   — no sqlite3_memory_used/alarm API.
+#   LOAD_EXTENSION      — no extension loading (also OMIT'ed).
+#   COMPILEOPTION_DIAGS — rusqlite never reads compile options.
+#   SHARED_CACHE        — exactly one connection (cache/index.rs).
+#   DEFAULT_MEMSTATUS=0 — memory accounting off by default (still enablable at
+#                        runtime, so no API is lost).
+#
+# Deliberately NOT set:
+#   SQLITE_THREADSAFE=0  — single-thread mode is UB if two threads touch SQLite
+#                         at once. The test suite runs in parallel threads with
+#                         separate connections; that is legal only in
+#                         multi-thread (2) or serialized (1) mode. Left at 1.
+#   SQLITE_OMIT_WAL      — the cache index uses WAL.
+#   SQLITE_OMIT_VIRTUALTABLE — still fails to link, because the generated
+#                         parser table references `sqlite3Alter*` /
+#                         `sqlite3Vtab*` entry points unconditionally.
+#   SQLITE_OMIT_PROGRESS_CALLBACK / OMIT_UTF16 / OMIT_DEPRECATED — rusqlite
+#                         references those entry points, so OMIT breaks linking.
+[env]
+LIBSQLITE3_FLAGS = "-DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_COMPILEOPTION_DIAGS -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_DEFAULT_MEMSTATUS=0 -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT2 -USQLITE_ENABLE_STAT4 -USQLITE_ENABLE_MEMORY_MANAGEMENT -USQLITE_ENABLE_LOAD_EXTENSION"

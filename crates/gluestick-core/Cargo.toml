@@ -1,0 +1,61 @@
+[package]
+name = "gluestick-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Gluestick embeddable engine — Windows package management core library (Scoop-compatible)"
+publish = false
+
+[features]
+# Opt-in GLUE_EXTRACT_PROFILE sub-phase timing (includes hot-loop clocks).
+# Off in release builds; enable for diagnostics only.
+extract-profile = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+md-5.workspace = true
+url.workspace = true
+# `Win32_System_Threading` is additive on top of the workspace feature set:
+# the uninstaller waits on the process that launched it before deleting files.
+windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
+# Blocking native-TLS (schannel on Windows) for HTTPS, wired directly (not via
+# ureq's `native-tls` feature) so the `webpki-root-certs` table does not bloat
+# `glue.exe`. TLS is performed by a bespoke `Connector`/`Transport` in
+# `crate::schannel`, assembled with `Agent::with_parts` in
+# `Downloader::build_agent` — no tokio/reqwest runtime in the tree.
+ureq.workspace = true
+http.workspace = true
+native-tls.workspace = true
+# Bundled SQLite is compiled from source (no system-DLL drift) and trimmed by
+# LIBSQLITE3_FLAGS in `.cargo/config.toml` — see that file for the flag
+# interactions. Pinned to the current upstream line so the amalgamation keeps
+# picking up SQLite security fixes (bundled SQLite 3.50.1 as of 0.36;
+# rusqlite 0.36 tracks libsqlite3-sys ^0.34).
+rusqlite = { version = "0.36", features = ["bundled"] }
+# CRC-32 for ZIP members and the gzip trailer: PCLMUL/SSE4.2 when available,
+# slice-by-8 otherwise (a byte-at-a-time table ran at ~300 MB/s on a 37 MB
+# package).
+crc32fast = "1"
+# Streaming raw-DEFLATE inflater for the ZIP and tar.gz readers. Pure Rust
+# (SIMD), same sink/CRC/SHA loop as the former miniz_oxide path.
+zlib-rs = "0.6"
+# In-process 7z extraction (LZMA/LZMA2/COPY) — the last common format that
+# otherwise required shelling out to 7z.exe. Uses the maintained sevenz-rust2
+# fork (the original `sevenz-rust` is abandoned with RUSTSEC-2026-0245, an
+# unpatched path-traversal RCE; every member is additionally validated with
+# our own `safepath`). `default-features = false` drops
+# aes256/bzip2/compress/ppmd — the minimal tree is lzma-rust2 (LZMA2) +
+# crc32fast, guarding glue.exe's size. Unsupported codecs (ppmd/bzip2) fall
+# back to the external 7z tool.
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["util"] }
+
+# Test-only: ArchiveWriter to build .7z fixtures for the round-trip unit test.
+# Same package name in [dependencies] + [dev-dependencies] so Cargo unifies
+# features: test builds get util+compress, the release binary keeps only `util`.
+[dev-dependencies]
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["util", "compress"] }

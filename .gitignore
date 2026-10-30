@@ -1,0 +1,7 @@
+# `.cargo/config.toml` is part of the build (bundled-SQLite flags); keep it tracked.
+.cargo/credentials.toml
+.cargo/credentials
+
+/target/
+/installer/cli/output/
+/installer/cli/payload/

@@ -1,0 +1,21 @@
+[package]
+name = "gluestick-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The official glue command line — Scoop-compatible, powered by the gluestick core engine"
+publish = false
+
+[[bin]]
+name = "glue"
+path = "src/main.rs"
+
+[dependencies]
+gluestick-core.workspace = true
+clap.workspace = true
+windows-sys.workspace = true
+
+[features]
+# Diagnostics only: enables the GLUE_EXTRACT_PROFILE sub-phase line.
+extract-profile = ["gluestick-core/extract-profile"]

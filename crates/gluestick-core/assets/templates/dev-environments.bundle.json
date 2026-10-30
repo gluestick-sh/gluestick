@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "kind": "gluestick.template-bundle",
+  "id": "dev-environments",
+  "name": "Dev environments",
+  "description": "Official development environment starter templates.",
+  "origin": "official",
+  "updatedAt": "2026-11-01",
+  "templates": [
+    {
+      "id": "vibe-coding",
+      "category": "ai",
+      "icon": "✨",
+      "title": { "en": "Vibe Coding", "zh": "氛围编程" },
+      "summary": { "en": "AI-assisted coding and multi-model switching", "zh": "AI 辅助编程与多模型切换" },
+      "description": {
+        "en": "For AI-native development workflows: quickly switch models and coding assistants in the terminal.",
+        "zh": "面向 AI 原生开发工作流，便于在终端中快速切换模型与编码助手。"
+      },
+      "packages": [
+        { "name": "claude-code", "bucket": "main", "label": { "en": "Claude Code CLI", "zh": "Claude Code 命令行" } },
+        { "name": "codex", "bucket": "main", "label": { "en": "Codex CLI", "zh": "Codex 命令行" } },
+        { "name": "magpie-ai", "bucket": "extras", "label": "Magpie AI" }
+      ]
+    },
+    {
+      "id": "deepseek-harness",
+      "category": "ai",
+      "icon": "🐋",
+      "title": { "en": "DeepSeek Harness", "zh": "DeepSeek 编程环境" },
+      "summary": { "en": "Reasonix and model switching for DeepSeek", "zh": "DeepSeek 专用：Reasonix 与模型切换" },
+      "description": {
+        "en": "A DeepSeek-first AI coding setup: the Reasonix desktop agent plus Magpie AI for one-click model and provider switching.",
+        "zh": "以 DeepSeek 为主的 AI 编程环境：Reasonix 桌面智能体，配 Magpie AI，一键切换模型与服务商。"
+      },
+      "packages": [
+        { "name": "magpie-ai", "bucket": "extras", "label": "Magpie AI" },
+        { "name": "reasonix-desktop", "bucket": "extras", "label": { "en": "Reasonix Desktop", "zh": "Reasonix 桌面版" } }
+      ]
+    },
+    {
+      "id": "game-dev",
+      "category": "game",
+      "icon": "🎮",
+      "title": { "en": "Game Dev", "zh": "游戏开发" },
+      "summary": { "en": "Indie game development starter", "zh": "独立游戏开发入门" },
+      "description": {
+        "en": "Game engines and 3D modeling tools for 2D/3D prototypes and assets.",
+        "zh": "游戏引擎与 3D 建模工具，适合 2D/3D 游戏原型与资产制作。"
+      },
+      "packages": [
+        { "name": "godot", "bucket": "extras", "label": "Godot" },
+        { "name": "blender", "bucket": "extras", "label": "Blender" },
+        { "name": "libresprite", "bucket": "extras", "label": "LibreSprite" }
+      ]
+    },
+    {
+      "id": "cad-3d",
+      "category": "design",
+      "icon": "📐",
+      "title": { "en": "CAD / 3D", "zh": "CAD / 3D 建模" },
+      "summary": { "en": "Parametric modeling and 3D design", "zh": "参数化建模与 3D 设计" },
+      "description": {
+        "en": "Open-source CAD suite for mechanical design, 3D printing and engineering drawings.",
+        "zh": "开源 CAD 套件，适合机械设计、3D 打印与工程制图。"
+      },
+      "packages": [
+        { "name": "freecad", "bucket": "extras", "label": "FreeCAD" }
+      ]
+    },
+    {
+      "id": "database-dev",
+      "category": "programming",
+      "icon": "≡",
+      "title": { "en": "Database", "zh": "数据库" },
+      "summary": { "en": "Common database services and engines", "zh": "常用数据库服务与引擎" },
+      "description": {
+        "en": "Popular relational, in-memory and document databases to install for local development.",
+        "zh": "常用关系型、内存与文档数据库，可按技术栈选择安装用于本地开发。"
+      },
+      "packages": [
+        { "name": "mariadb", "bucket": "main", "label": "MariaDB" },
+        { "name": "mysql", "bucket": "main", "label": "MySQL" },
+        { "name": "redis", "bucket": "main", "label": "Redis" },
+        { "name": "mongodb", "bucket": "main", "label": "MongoDB" },
+        { "name": "postgresql", "bucket": "main", "label": "PostgreSQL" },
+        { "name": "sqlite", "bucket": "main", "label": "SQLite" }
+      ]
+    }
+  ]
+}
