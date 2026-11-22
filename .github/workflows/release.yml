@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          # Read the channel from rust-toolchain.toml so this workflow never
+          # drifts from the version build.ps1 uses. Targets are architectural
+          # constants for this Windows amd64/arm64 product.
+          $toml = Get-Content -LiteralPath 'rust-toolchain.toml' -Raw
+          if ($toml -match '(?m)^\s*channel\s*=\s*"([^"]+)"') {
+            $channel = $Matches[1]
+          } else {
+            throw 'Could not read the pinned Rust channel from rust-toolchain.toml.'
+          }
+          rustup toolchain install $channel --profile minimal
+          rustup target add x86_64-pc-windows-msvc --toolchain $channel
+          rustup target add aarch64-pc-windows-msvc --toolchain $channel
+          rustup show
+
+      - name: Install NSIS
+        run: |
+          if (Get-Command makensis.exe -ErrorAction SilentlyContinue) {
+            Write-Host "NSIS found on PATH."
+          } elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NSIS\Bin\makensis.exe')) {
+            Write-Host "NSIS found in Program Files."
+          } elseif (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'NSIS\Bin\makensis.exe')) {
+            Write-Host "NSIS found in Program Files (x86)."
+          } else {
+            Write-Host "Installing NSIS via Chocolatey..."
+            choco install nsis --no-progress --yes
+          }
+
+      - name: Validate tag against workspace version
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^[vV]', ''
+          $manifest = Get-Content -LiteralPath 'Cargo.toml' -Raw
+          if ($manifest -match '(?ms)^\[workspace\.package\].*?^\s*version\s*=\s*"([^"]+)"') {
+            $manifestVersion = $Matches[1]
+          } else {
+            throw 'Could not read [workspace.package].version from Cargo.toml.'
+          }
+          if ($version -ne $manifestVersion) {
+            throw "Tag '$tag' resolves to version '$version', which does not match [workspace.package].version '$manifestVersion' in Cargo.toml."
+          }
+          Write-Host "Release version: $version"
+
+      - name: Build and package installers
+        run: |
+          & .\installer\cli\build.ps1
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            --title "${{ github.ref_name }}" `
+            --generate-notes `
+            installer/cli/output/GluestickSetup-amd64.exe `
+            installer/cli/output/GluestickSetup-amd64.exe.sha256 `
+            installer/cli/output/GluestickSetup-arm64.exe `
+            installer/cli/output/GluestickSetup-arm64.exe.sha256

@@ -117,6 +117,15 @@ installer\cli\build.ps1 -Arch arm64 -SkipBuild
 The output is `installer\cli\output\GluestickSetup-<arch>.exe` plus a matching `.sha256` file. What
 that package does when it runs is documented in [the README](README.md#installing-gluestick).
 
+## Releases
+
+Pushing a `v*` tag (for example `v0.1.1`) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds both architectures on
+a GitHub Actions Windows runner, packages the NSIS installers, and publishes
+`GluestickSetup-amd64.exe` and `GluestickSetup-arm64.exe` (plus their `.sha256` files) as a GitHub
+release. The tag's version must match `[workspace.package].version` in `Cargo.toml`, so bump that
+first and push the matching tag.
+
 ## Documentation
 
 `README.md` and `README.zh-CN.md` are kept in sync section by section — change both in the same
