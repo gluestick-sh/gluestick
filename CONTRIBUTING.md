@@ -126,6 +126,12 @@ a GitHub Actions Windows runner, packages the NSIS installers, and publishes
 release. The tag's version must match `[workspace.package].version` in `Cargo.toml`, so bump that
 first and push the matching tag.
 
+After the GitHub release is created, the same workflow copies those four files over SSH to
+`https://gluestick.sh/releases/cli/`. The `workflow_dispatch` trigger re-syncs an existing release's
+files to the site without rebuilding, using the `tag` input. The SSH step needs these repository
+secrets: `GLUESTICK_SSH_HOST`, `GLUESTICK_SSH_PORT`, `GLUESTICK_SSH_USER`, `GLUESTICK_SSH_KEY` and
+`GLUESTICK_SSH_PATH`; `GLUESTICK_SSH_PASSPHRASE` and `GLUESTICK_SSH_KNOWN_HOSTS` are optional.
+
 ## Documentation
 
 `README.md` and `README.zh-CN.md` are kept in sync section by section — change both in the same
